@@ -1,0 +1,131 @@
+🎬 交易代理演示模式
+1. 初始化交易代理...
+交易代理初始化成功
+交易代理已启动
+
+2. 当前投资组合状态:
+
+==================================================
+投资组合摘要
+==================================================
+现金余额: $100,000.00
+投资组合价值: $100,000.00
+总收益: $0.00
+收益率: 0.00%
+
+无持仓
+==================================================
+
+3. 获取市场数据...
+  AAPL: $203.35 (+0.48%)
+  GOOGL: $195.04 (+3.12%)
+  MSFT: $535.64 (+2.20%)
+
+4. 获取市场新闻...
+  1. Parents are draining money from retirement accounts and home...
+  2. Jim Cramer attributes market resilience to Big Tech's earnin...
+  3. Denny's offers mixed views on restaurant industry, as bigger...
+
+5. AI决策生成...
+
+===== 开始生成交易决策 =====
+获取到投资组合状态: 现金 $100000.00, 总价值 $100000.00
+获取到 40 条新闻
+正在调用LLM生成决策...
+
+===== LLM原始响应 =====
+{
+    "action_type": "buy",
+    "symbol": "AAPL",
+    "quantity": 100,
+    "price": 203.35,
+    "reason": "Apple's initiative to form an in-house AI chatbot team could enhance its competitive 
+    "reason": "Apple's initiative to form an in-house AI chatbot team could enhance its competitive edge in AI technology, potentially driving future growth. The stock price is relatively stable, and 
+    "reason": "Apple's initiative to form an in-house AI chatbot team could enhance its competitive edge in AI technology, potentially driving future growth. The stock price is relatively stable, and the company has a strong track record.",
+    "parameters": {}
+}
+=======================
+
+JSON解析成功，决策数据:
+{
+  "action_type": "buy",
+  "symbol": "AAPL",
+  "quantity": 100,
+  "price": 203.35,
+  "reason": "Apple's initiative to form an in-house AI chatbot team could enhance its competitive ed
+  "reason": "Apple's initiative to form an in-house AI chatbot team could enhance its competitive edge in AI technology, potentially driving future growth. The stock price is relatively stable, and th
+  "reason": "Apple's initiative to form an in-house AI chatbot team could enhance its competitive edge in AI technology, potentially driving future growth. The stock price is relatively stable, and the company has a strong track record.",
+  "parameters": {}
+}
+创建的TradingAction: BUY: 100.0 shares of AAPL at $203.35
+action_type: buy, symbol: AAPL, quantity: 100.0
+LLM生成的决策: BUY: 100.0 shares of AAPL at $203.35
+
+===== 决策验证 =====
+action_type: buy
+symbol: AAPL
+quantity: 100.0
+trading_symbols: ['AAPL', 'GOOGL', 'MSFT', 'TSLA']
+决策验证通过
+===================
+
+决策生成完成
+=========================
+
+  决策: buy
+  理由: Apple's initiative to form an in-house AI chatbot team could enhance its competitive edge in
+  理由: Apple's initiative to form an in-house AI chatbot team could enhance its competitive edge in AI technology, potentially driving future growth. The stock price is relatively stable, and the com
+  理由: Apple's initiative to form an in-house AI chatbot team could enhance its competitive edge in AI technology, potentially driving future growth. The stock price is relatively stable, and the company has a strong track record.
+
+6. 执行决策...
+执行结果: {'success': True, 'message': '成功买入 100.0 股 AAPL，价格 $203.35', 'action': 'BUY: 100.0
+执行结果: {'success': True, 'message': '成功买入 100.0 股 AAPL，价格 $203.35', 'action': 'BUY: 100.0 shares of AAPL at $203.35', 'cost': 20335.0, 'remaining_cash': 79665.0, 'explanation': '这项交易决
+执行结果: {'success': True, 'message': '成功买入 100.0 股 AAPL，价格 $203.35', 'action': 'BUY: 100.0 shares of AAPL at $203.35', 'cost': 20335.0, 'remaining_cash': 79665.0, 'explanation': '这项交易决 策基于以下几个关键因素：\n\n1. **苹果公司在AI领域的战略举措**：苹果公司正在组建一个内部AI聊天机器人
+执行结果: {'success': True, 'message': '成功买入 100.0 股 AAPL，价格 $203.35', 'action': 'BUY: 100.0 shares of AAPL at $203.35', 'cost': 20335.0, 'remaining_cash': 79665.0, 'explanation': '这项交易决 策基于以下几个关键因素：\n\n1. **苹果公司在AI领域的战略举措**：苹果公司正在组建一个内部AI聊天机器人 团队，这表明公司正在积极投资于人工智能技术。这种战略举措可能会增强苹果在AI技术方面的竞争优势。随着AI
+执行结果: {'success': True, 'message': '成功买入 100.0 股 AAPL，价格 $203.35', 'action': 'BUY: 100.0 shares of AAPL at $203.35', 'cost': 20335.0, 'remaining_cash': 79665.0, 'explanation': '这项交易决 策基于以下几个关键因素：\n\n1. **苹果公司在AI领域的战略举措**：苹果公司正在组建一个内部AI聊天机器人 团队，这表明公司正在积极投资于人工智能技术。这种战略举措可能会增强苹果在AI技术方面的竞争优势。随着AI技术在各个行业的应用不断扩大，苹果的这一举措可能会为公司带来新的增长机会。\n\n2. **股票价格的稳定性*
+执行结果: {'success': True, 'message': '成功买入 100.0 股 AAPL，价格 $203.35', 'action': 'BUY: 100.0 shares of AAPL at $203.35', 'cost': 20335.0, 'remaining_cash': 79665.0, 'explanation': '这项交易决 策基于以下几个关键因素：\n\n1. **苹果公司在AI领域的战略举措**：苹果公司正在组建一个内部AI聊天机器人 团队，这表明公司正在积极投资于人工智能技术。这种战略举措可能会增强苹果在AI技术方面的竞争优势。随着AI技术在各个行业的应用不断扩大，苹果的这一举措可能会为公司带来新的增长机会。\n\n2. **股票价格的稳定性**：当前苹果的股价相对稳定，交易价格为每股203.35美元。这种稳定性表明市场对苹果的信心较强，投资者对其
+执行结果: {'success': True, 'message': '成功买入 100.0 股 AAPL，价格 $203.35', 'action': 'BUY: 100.0 shares of AAPL at $203.35', 'cost': 20335.0, 'remaining_cash': 79665.0, 'explanation': '这项交易决 策基于以下几个关键因素：\n\n1. **苹果公司在AI领域的战略举措**：苹果公司正在组建一个内部AI聊天机器人 团队，这表明公司正在积极投资于人工智能技术。这种战略举措可能会增强苹果在AI技术方面的竞争优势。随着AI技术在各个行业的应用不断扩大，苹果的这一举措可能会为公司带来新的增长机会。\n\n2. **股票价格的稳定性**：当前苹果的股价相对稳定，交易价格为每股203.35美元。这种稳定性表明市场对苹果的信心较强，投资者对其 未来表现持乐观态度。稳定的股价通常意味着较低的投资风险。\n\n3. **公司强劲的业绩记录**：苹果公司拥有
+执行结果: {'success': True, 'message': '成功买入 100.0 股 AAPL，价格 $203.35', 'action': 'BUY: 100.0 shares of AAPL at $203.35', 'cost': 20335.0, 'remaining_cash': 79665.0, 'explanation': '这项交易决 策基于以下几个关键因素：\n\n1. **苹果公司在AI领域的战略举措**：苹果公司正在组建一个内部AI聊天机器人 团队，这表明公司正在积极投资于人工智能技术。这种战略举措可能会增强苹果在AI技术方面的竞争优势。随着AI技术在各个行业的应用不断扩大，苹果的这一举措可能会为公司带来新的增长机会。\n\n2. **股票价格的稳定性**：当前苹果的股价相对稳定，交易价格为每股203.35美元。这种稳定性表明市场对苹果的信心较强，投资者对其 未来表现持乐观态度。稳定的股价通常意味着较低的投资风险。\n\n3. **公司强劲的业绩记录**：苹果公司拥有 强大的业绩记录和品牌影响力。其在创新、产品质量和市场份额方面的表现一直优于竞争对手。这种强劲的业绩记
+执行结果: {'success': True, 'message': '成功买入 100.0 股 AAPL，价格 $203.35', 'action': 'BUY: 100.0 shares of AAPL at $203.35', 'cost': 20335.0, 'remaining_cash': 79665.0, 'explanation': '这项交易决 策基于以下几个关键因素：\n\n1. **苹果公司在AI领域的战略举措**：苹果公司正在组建一个内部AI聊天机器人 团队，这表明公司正在积极投资于人工智能技术。这种战略举措可能会增强苹果在AI技术方面的竞争优势。随着AI技术在各个行业的应用不断扩大，苹果的这一举措可能会为公司带来新的增长机会。\n\n2. **股票价格的稳定性**：当前苹果的股价相对稳定，交易价格为每股203.35美元。这种稳定性表明市场对苹果的信心较强，投资者对其 未来表现持乐观态度。稳定的股价通常意味着较低的投资风险。\n\n3. **公司强劲的业绩记录**：苹果公司拥有 强大的业绩记录和品牌影响力。其在创新、产品质量和市场份额方面的表现一直优于竞争对手。这种强劲的业绩记录为投资者提供了信心，认为公司能够持续创造价值。\n\n4. **市场背景**：当前市场状况可能包括对科技股的
+执行结果: {'success': True, 'message': '成功买入 100.0 股 AAPL，价格 $203.35', 'action': 'BUY: 100.0 shares of AAPL at $203.35', 'cost': 20335.0, 'remaining_cash': 79665.0, 'explanation': '这项交易决 策基于以下几个关键因素：\n\n1. **苹果公司在AI领域的战略举措**：苹果公司正在组建一个内部AI聊天机器人 团队，这表明公司正在积极投资于人工智能技术。这种战略举措可能会增强苹果在AI技术方面的竞争优势。随着AI技术在各个行业的应用不断扩大，苹果的这一举措可能会为公司带来新的增长机会。\n\n2. **股票价格的稳定性**：当前苹果的股价相对稳定，交易价格为每股203.35美元。这种稳定性表明市场对苹果的信心较强，投资者对其 未来表现持乐观态度。稳定的股价通常意味着较低的投资风险。\n\n3. **公司强劲的业绩记录**：苹果公司拥有 强大的业绩记录和品牌影响力。其在创新、产品质量和市场份额方面的表现一直优于竞争对手。这种强劲的业绩记录为投资者提供了信心，认为公司能够持续创造价值。\n\n4. **市场背景**：当前市场状况可能包括对科技股的 整体看好，尤其是那些在AI领域有积极布局的公司。投资者可能认为AI技术将成为未来增长的重要驱动力，因此对
+执行结果: {'success': True, 'message': '成功买入 100.0 股 AAPL，价格 $203.35', 'action': 'BUY: 100.0 shares of AAPL at $203.35', 'cost': 20335.0, 'remaining_cash': 79665.0, 'explanation': '这项交易决 策基于以下几个关键因素：\n\n1. **苹果公司在AI领域的战略举措**：苹果公司正在组建一个内部AI聊天机器人 团队，这表明公司正在积极投资于人工智能技术。这种战略举措可能会增强苹果在AI技术方面的竞争优势。随着AI技术在各个行业的应用不断扩大，苹果的这一举措可能会为公司带来新的增长机会。\n\n2. **股票价格的稳定性**：当前苹果的股价相对稳定，交易价格为每股203.35美元。这种稳定性表明市场对苹果的信心较强，投资者对其 未来表现持乐观态度。稳定的股价通常意味着较低的投资风险。\n\n3. **公司强劲的业绩记录**：苹果公司拥有 强大的业绩记录和品牌影响力。其在创新、产品质量和市场份额方面的表现一直优于竞争对手。这种强劲的业绩记录为投资者提供了信心，认为公司能够持续创造价值。\n\n4. **市场背景**：当前市场状况可能包括对科技股的 整体看好，尤其是那些在AI领域有积极布局的公司。投资者可能认为AI技术将成为未来增长的重要驱动力，因此对苹果这样的公司给予更高的估值。\n\n综合以上因素，购买苹果公司的股票被认为是一个有潜力的投资决策，旨在
+执行结果: {'success': True, 'message': '成功买入 100.0 股 AAPL，价格 $203.35', 'action': 'BUY: 100.0 shares of AAPL at $203.35', 'cost': 20335.0, 'remaining_cash': 79665.0, 'explanation': '这项交易决 策基于以下几个关键因素：\n\n1. **苹果公司在AI领域的战略举措**：苹果公司正在组建一个内部AI聊天机器人 团队，这表明公司正在积极投资于人工智能技术。这种战略举措可能会增强苹果在AI技术方面的竞争优势。随着AI技术在各个行业的应用不断扩大，苹果的这一举措可能会为公司带来新的增长机会。\n\n2. **股票价格的稳定性**：当前苹果的股价相对稳定，交易价格为每股203.35美元。这种稳定性表明市场对苹果的信心较强，投资者对其 未来表现持乐观态度。稳定的股价通常意味着较低的投资风险。\n\n3. **公司强劲的业绩记录**：苹果公司拥有 强大的业绩记录和品牌影响力。其在创新、产品质量和市场份额方面的表现一直优于竞争对手。这种强劲的业绩记录为投资者提供了信心，认为公司能够持续创造价值。\n\n4. **市场背景**：当前市场状况可能包括对科技股的 整体看好，尤其是那些在AI领域有积极布局的公司。投资者可能认为AI技术将成为未来增长的重要驱动力，因此对苹果这样的公司给予更高的估值。\n\n综合以上因素，购买苹果公司的股票被认为是一个有潜力的投资决策，旨在利用公司在AI领域的战略发展和其稳定的市场表现来实现未来的资本增值。'}
+
+交易结果: ✅ 成功
+详情: 成功买入 100.0 股 AAPL，价格 $203.35
+解释: 这项交易决策基于以下几个关键因素：
+
+1. **苹果公司在AI领域的战略举措**：苹果公司正在组建一个内部AI聊天机器人团队，这表明公司正在积极投资
+1. **苹果公司在AI领域的战略举措**：苹果公司正在组建一个内部AI聊天机器人团队，这表明公司正在积极投资 于人工智能技术。这种战略举措可能会增强苹果在AI技术方面的竞争优势。随着AI技术在各个行业的应用不断扩大
+1. **苹果公司在AI领域的战略举措**：苹果公司正在组建一个内部AI聊天机器人团队，这表明公司正在积极投资 于人工智能技术。这种战略举措可能会增强苹果在AI技术方面的竞争优势。随着AI技术在各个行业的应用不断扩大，苹果的这一举措可能会为公司带来新的增长机会。
+
+2. **股票价格的稳定性**：当前苹果的股价相对稳定，交易价格为每股203.35美元。这种稳定性表明市场对苹果
+2. **股票价格的稳定性**：当前苹果的股价相对稳定，交易价格为每股203.35美元。这种稳定性表明市场对苹果 的信心较强，投资者对其未来表现持乐观态度。稳定的股价通常意味着较低的投资风险。
+
+3. **公司强劲的业绩记录**：苹果公司拥有强大的业绩记录和品牌影响力。其在创新、产品质量和市场份额方面
+3. **公司强劲的业绩记录**：苹果公司拥有强大的业绩记录和品牌影响力。其在创新、产品质量和市场份额方面 的表现一直优于竞争对手。这种强劲的业绩记录为投资者提供了信心，认为公司能够持续创造价值。
+
+4. **市场背景**：当前市场状况可能包括对科技股的整体看好，尤其是那些在AI领域有积极布局的公司。投资者
+4. **市场背景**：当前市场状况可能包括对科技股的整体看好，尤其是那些在AI领域有积极布局的公司。投资者 可能认为AI技术将成为未来增长的重要驱动力，因此对苹果这样的公司给予更高的估值。
+
+综合以上因素，购买苹果公司的股票被认为是一个有潜力的投资决策，旨在利用公司在AI领域的战略发展和其稳定
+综合以上因素，购买苹果公司的股票被认为是一个有潜力的投资决策，旨在利用公司在AI领域的战略发展和其稳定的市场表现来实现未来的资本增值。
+成本: $20,335.00
+
+7. 更新后的投资组合:
+
+==================================================
+投资组合摘要
+==================================================
+现金余额: $79,665.00
+投资组合价值: $100,000.00
+总收益: $0.00
+收益率: 0.00%
+
+持仓详情 (1 只股票):
+  AAPL: 100.0 股 @ $203.35
+    当前价值: $20,335.00
+==================================================
+
+✅ 演示完成！
+交易代理已停止 
