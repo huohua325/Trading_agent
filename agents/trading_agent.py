@@ -1,5 +1,5 @@
 import asyncio
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Dict, List, Any, Optional
 from .base_agent import BaseAgent
 from ..actions.action_types import TradingAction, ActionType
@@ -27,7 +27,27 @@ class TradingAgent(BaseAgent):
         
         # 市场条件追踪
         self.last_market_data = {}
+
+        # 市场情绪缓存
         self.market_sentiment = {}
+        self.market_sentiment_timestamp = None
+        
+        # 财务数据缓存
+        self.financial_data = {}
+        self.financial_data_timestamp = None
+        
+        # Finnhub配置
+        self.finnhub_historical_days = config.get("finnhub_historical_days", 365)
+        self.finnhub_price_resolution = config.get("finnhub_price_resolution", "D")
+        self.finnhub_financial_quarters = config.get("finnhub_financial_quarters", 4)
+        self.finnhub_earnings_limit = config.get("finnhub_earnings_limit", 4)
+        self.finnhub_cache_duration = config.get("finnhub_cache_duration", 3600)  # 默认1小时
+        self.finnhub_data_cache_enabled = config.get("finnhub_data_cache_enabled", True)
+        
+        # API调用限制管理
+        self.api_calls_this_minute = 0
+        self.api_call_reset_time = datetime.now() + timedelta(minutes=1)
+        self.finnhub_api_calls_per_minute = config.get("finnhub_api_calls_per_minute", 45)
         
     async def initialize(self) -> bool:
         """初始化代理"""
@@ -62,7 +82,7 @@ class TradingAgent(BaseAgent):
             if not market_data:
                 print("无法获取市场数据，返回HOLD决策")
                 return TradingAction(
-                    action_type="HOLD",
+                    action_type="hold",
                     reason="无法获取市场数据"
                 )
             
@@ -78,32 +98,102 @@ class TradingAgent(BaseAgent):
                 print(f"获取新闻数据失败: {e}")
                 news_data = []  # 如果新闻获取失败，继续使用空列表
             
-            # 4. 准备历史上下文
+            # 4. 分析市场情绪（检查缓存是否有效）
+            if not self._is_cache_valid(self.market_sentiment_timestamp):
+                self.market_sentiment = {}
+                try:
+                    if news_data:
+                        # 如果有交易股票，针对第一个股票进行情绪分析
+                        symbol = None
+                        if self.trading_symbols:
+                            symbol = self.trading_symbols[0] if isinstance(self.trading_symbols, list) else self.trading_symbols
+                        
+                        print(f"分析市场情绪{' (针对 ' + symbol + ')' if symbol else ''}...")
+                        market_sentiment = await self.llm.analyze_market_sentiment(news_data, symbol)
+                        self.market_sentiment = market_sentiment  # 更新缓存的市场情绪
+                        self.market_sentiment_timestamp = datetime.now()  # 更新时间戳
+                        
+                        print(f"市场情绪: {self.market_sentiment.get('overall_sentiment', 'unknown')}")
+                        print(f"信心指数: {self.market_sentiment.get('confidence', 0)}")
+                        print(f"风险水平: {self.market_sentiment.get('risk_level', 'unknown')}")
+                        
+                        # 打印关键因素
+                        key_factors = self.market_sentiment.get('key_factors', [])
+                        if key_factors:
+                            print("关键因素:")
+                            for factor in key_factors[:3]:  # 只显示前3个因素
+                                print(f"  - {factor}")
+                except Exception as e:
+                    print(f"市场情绪分析失败: {e}")
+                    # 如果分析失败，使用中性情绪
+                    self.market_sentiment = {
+                        "overall_sentiment": "neutral",
+                        "confidence": 0.5,
+                        "risk_level": "medium",
+                        "key_factors": ["分析失败"],
+                        "recommendation": "谨慎观察"
+                    }
+                    self.market_sentiment_timestamp = datetime.now()  # 更新时间戳
+            else:
+                print("使用缓存的市场情绪数据")
+                
+            # 5. 准备历史上下文
             historical_context = self.get_recent_performance()
             
-            # 5. 生成决策
+            # 6. 获取财务数据（检查缓存是否有效）
+            if not self._is_cache_valid(self.financial_data_timestamp):
+                self.financial_data = {}
+                try:
+                    if hasattr(self.data_source, 'get_company_financials') and self.trading_symbols:
+                        # 只获取第一个交易股票的财务数据作为示例
+                        symbol = self.trading_symbols[0] if isinstance(self.trading_symbols, list) else self.trading_symbols
+                        print(f"获取 {symbol} 的财务数据...")
+                        
+                        # 传递配置参数
+                        self.financial_data = await self.data_source.get_company_financials(
+                            symbol, 
+                            quarters=self.finnhub_financial_quarters,
+                            earnings_limit=self.finnhub_earnings_limit
+                        )
+                        
+                        # 获取关键财务指标
+                        if hasattr(self.data_source, 'get_financial_metrics'):
+                            key_metrics = await self.data_source.get_financial_metrics(symbol)
+                            self.financial_data["key_metrics"] = key_metrics
+                            
+                        self.financial_data_timestamp = datetime.now()  # 更新时间戳
+                        print(f"成功获取财务数据")
+                except Exception as e:
+                    print(f"获取财务数据失败: {e}")
+                    self.financial_data = {}  # 如果财务数据获取失败，使用空字典
+            else:
+                print("使用缓存的财务数据")
+            
+            # 7. 生成决策
             print("正在调用LLM生成决策...")
             decision = await self.llm.generate_trading_decision(
                 market_data=market_data,
                 portfolio_status=portfolio,
                 news_data=news_data,
-                historical_context=historical_context
+                historical_context=historical_context,
+                financial_data=self.financial_data,
+                market_sentiment=self.market_sentiment  # 使用类属性self.market_sentiment
             )
             print(f"LLM生成的决策: {decision}")
             
-            # 6. 验证决策
+            # 8. 验证决策
             if not self.validate_decision(decision):
                 print("决策验证失败，返回HOLD决策")
                 return TradingAction(
-                    action_type="HOLD",
+                    action_type="hold",
                     reason="决策验证失败"
                 )
             
-            # 7. 检查每日交易限制
+            # 9. 检查每日交易限制
             if self._check_daily_trade_limit(decision):
                 print("已达到每日交易限制，返回HOLD决策")
                 return TradingAction(
-                    action_type="HOLD",
+                    action_type="hold",
                     reason="已达到每日交易限制"
                 )
             
@@ -114,8 +204,90 @@ class TradingAgent(BaseAgent):
         except Exception as e:
             print(f"决策生成失败: {e}")
             return TradingAction(
-                action_type="HOLD",
+                action_type="hold",
                 reason=f"决策生成错误: {str(e)}"
+            )
+    
+    def _is_cache_valid(self, timestamp) -> bool:
+        """检查缓存是否有效"""
+        # 如果缓存禁用，总是返回False（需要刷新）
+        if not self.finnhub_data_cache_enabled:
+            return False
+            
+        # 如果没有时间戳，缓存无效
+        if timestamp is None:
+            return False
+            
+        # 检查是否超过缓存时间
+        elapsed_seconds = (datetime.now() - timestamp).total_seconds()
+        return elapsed_seconds < self.finnhub_cache_duration
+    
+    async def check_api_rate_limit(self):
+        """检查API调用频率限制，必要时等待"""
+        current_time = datetime.now()
+        
+        # 如果到了重置时间，重置计数器
+        if current_time >= self.api_call_reset_time:
+            self.api_calls_this_minute = 0
+            self.api_call_reset_time = current_time + timedelta(minutes=1)
+        
+        # 如果已达到限制，等待到下一个重置时间
+        if self.api_calls_this_minute >= self.finnhub_api_calls_per_minute:
+            wait_time = (self.api_call_reset_time - current_time).total_seconds()
+            print(f"已达到API调用频率限制，等待 {wait_time:.2f} 秒...")
+            await asyncio.sleep(wait_time)
+            self.api_calls_this_minute = 0
+            self.api_call_reset_time = datetime.now() + timedelta(minutes=1)
+        
+        # 增加API调用计数
+        self.api_calls_this_minute += 1
+    
+    async def get_historical_data(self, symbol: str, days: int = None) -> Dict[str, Any]:
+        """获取历史价格数据，应用配置的限制"""
+        await self.check_api_rate_limit()
+        
+        # 使用配置的天数或默认值
+        if days is None:
+            days = self.finnhub_historical_days
+        
+        # 计算开始和结束日期
+        end_date = datetime.now()
+        start_date = end_date - timedelta(days=days)
+        
+        # 调用数据源的方法，传递配置的分辨率
+        return await self.data_source.get_historical_data(
+            symbol, 
+            start_date, 
+            end_date, 
+            interval=self.finnhub_price_resolution
+        )
+    
+    async def get_news_data(self, symbols=None) -> List[Dict[str, Any]]:
+        """获取新闻数据，应用配置的限制"""
+        await self.check_api_rate_limit()
+        
+        # 使用配置的新闻限制
+        limit = self.config.get("news_limit", 10)
+        days_back = self.config.get("news_days_back", 7)
+        
+        # 如果提供了多个股票符号，获取所有相关新闻
+        if isinstance(symbols, list) and len(symbols) > 0:
+            all_news = []
+            for symbol in symbols[:3]:  # 限制最多查询3个股票的新闻以避免过多API调用
+                news = await self.data_source.get_news(
+                    symbol=symbol,
+                    limit=limit,
+                    days_back=days_back
+                )
+                all_news.extend(news)
+            return all_news[:limit]  # 返回合并后的新闻，但仍然限制总数
+        else:
+            # 单个股票或一般市场新闻
+            symbol = symbols if not isinstance(symbols, list) else (symbols[0] if symbols else None)
+            return await self.data_source.get_news(
+                symbol=symbol,
+                limit=limit,
+                days_back=days_back
             )
     
     async def execute_decision(self, action: TradingAction) -> Dict[str, Any]:
@@ -143,6 +315,7 @@ class TradingAgent(BaseAgent):
                 # 添加实时价格信息
                 if action.symbol and not action.price:
                     try:
+                        await self.check_api_rate_limit()  # 检查API调用限制
                         price_data = await self.data_source.get_real_time_price(action.symbol)
                         action.price = price_data.get("price", 0)
                     except:
@@ -366,9 +539,8 @@ class TradingAgent(BaseAgent):
     async def _handle_get_news(self, action: TradingAction) -> Dict[str, Any]:
         """处理获取新闻行为"""
         try:
-            news = await self.data_source.get_news(
-                symbol=action.symbol,
-                limit=self.config.get("news_limit", 10)
+            news = await self.get_news_data(
+                symbol=action.symbol
             )
             return {
                 "success": True,
@@ -382,7 +554,11 @@ class TradingAgent(BaseAgent):
             }
     
     def _check_daily_trade_limit(self, action: TradingAction) -> bool:
-        """检查每日交易限制"""
+        """检查每日交易限制
+        
+        返回值:
+            bool: 如果达到或超过每日交易限制返回True，否则返回False
+        """
         # 获取action_type的值，处理可能是枚举或字符串的情况
         action_type_value = action.action_type.value if hasattr(action.action_type, 'value') else action.action_type
         action_type_value = action_type_value.lower() if isinstance(action_type_value, str) else action_type_value
