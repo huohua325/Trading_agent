@@ -40,6 +40,8 @@ class FinnhubDataSource(BaseDataSource):
             resolution = '60'
         elif interval == 'minute':
             resolution = '1'
+        elif interval in ['1', '5', '15', '30', '60', 'D', 'W', 'M']:
+            resolution = interval
         
         try:
             # Finnhub API调用是同步的，使用run_in_executor在异步环境中运行
@@ -189,8 +191,7 @@ class FinnhubDataSource(BaseDataSource):
             
         except Exception as e:
             print(f"获取新闻数据时出错: {e}")
-            # 返回模拟数据作为降级方案
-            return self._generate_mock_news(symbol)
+            return []
     
     async def search_symbols(self, query: str) -> List[Dict[str, Any]]:
         """搜索股票代码"""
@@ -230,55 +231,175 @@ class FinnhubDataSource(BaseDataSource):
             return quote.get('c', 0) > 0
         except:
             return False
+
+    async def get_basic_financials(self, symbol: str) -> Dict[str, Any]:
+        """获取基本财务数据
+        
+        Args:
+            symbol: 股票代码
+            
+        Returns:
+            包含基本财务指标的字典
+        """
+        if not self.validate_symbol(symbol):
+            raise ValueError(f"Invalid symbol: {symbol}")
+        
+        try:
+            loop = asyncio.get_event_loop()
+            financials = await loop.run_in_executor(
+                None, 
+                lambda: self.client.company_basic_financials(symbol, 'all')
+            )
+            
+            return financials
+        except Exception as e:
+            print(f"获取 {symbol} 基本财务数据失败: {e}")
+            return {"error": str(e)}
     
-    def _generate_mock_news(self, symbol: Optional[str] = None) -> List[Dict[str, Any]]:
-        """生成模拟新闻数据（当API不可用时）"""
-        current_date = datetime.now().isoformat()
+    async def get_reported_financials(self, symbol: str, freq: str = 'annual') -> Dict[str, Any]:
+        """获取已报告的财务报表
         
-        mock_news = [
-            {
-                "id": "mock_1",
-                "title": "市场概览：今日股市表现平稳",
-                "description": "主要指数小幅波动，投资者保持谨慎态度。",
-                "url": "https://example.com/market-overview",
-                "published_date": current_date,
-                "source": "模拟新闻源",
-                "tags": ["市场", "概览"],
-                "tickers": []
-            },
-            {
-                "id": "mock_2",
-                "title": "经济数据：通胀率保持稳定",
-                "description": "最新经济数据显示通胀率与上月持平，经济增长缓慢但稳定。",
-                "url": "https://example.com/economic-data",
-                "published_date": current_date,
-                "source": "模拟新闻源",
-                "tags": ["经济", "通胀"],
-                "tickers": []
-            },
-            {
-                "id": "mock_3",
-                "title": "科技股今日领涨大盘",
-                "description": "大型科技公司股价上涨，带动市场整体走高。",
-                "url": "https://example.com/tech-stocks",
-                "published_date": current_date,
-                "source": "模拟新闻源",
-                "tags": ["科技", "股票"],
-                "tickers": ["AAPL", "MSFT", "GOOGL"]
+        Args:
+            symbol: 股票代码
+            freq: 频率，'annual'或'quarterly'
+            
+        Returns:
+            包含财务报表的字典
+        """
+        if not self.validate_symbol(symbol):
+            raise ValueError(f"Invalid symbol: {symbol}")
+        
+        try:
+            loop = asyncio.get_event_loop()
+            financials = await loop.run_in_executor(
+                None, 
+                lambda: self.client.financials_reported(symbol=symbol, freq=freq)
+            )
+            
+            return financials
+        except Exception as e:
+            print(f"获取 {symbol} 已报告的财务报表失败: {e}")
+            return {"error": str(e)}
+    
+    async def get_earnings_surprises(self, symbol: str, limit: int = 4) -> List[Dict[str, Any]]:
+        """获取盈利惊喜数据
+        
+        Args:
+            symbol: 股票代码
+            limit: 返回的数据点数量
+            
+        Returns:
+            盈利惊喜数据列表
+        """
+        if not self.validate_symbol(symbol):
+            raise ValueError(f"Invalid symbol: {symbol}")
+        
+        try:
+            loop = asyncio.get_event_loop()
+            earnings = await loop.run_in_executor(
+                None, 
+                lambda: self.client.company_earnings(symbol, limit=limit)
+            )
+            
+            return earnings
+        except Exception as e:
+            print(f"获取 {symbol} 盈利惊喜数据失败: {e}")
+            return []
+    
+    async def get_recommendation_trends(self, symbol: str) -> List[Dict[str, Any]]:
+        """获取分析师推荐趋势
+        
+        Args:
+            symbol: 股票代码
+            
+        Returns:
+            分析师推荐趋势数据列表
+        """
+        if not self.validate_symbol(symbol):
+            raise ValueError(f"Invalid symbol: {symbol}")
+        
+        try:
+            loop = asyncio.get_event_loop()
+            trends = await loop.run_in_executor(
+                None, 
+                lambda: self.client.recommendation_trends(symbol)
+            )
+            
+            return trends
+        except Exception as e:
+            print(f"获取 {symbol} 推荐趋势失败: {e}")
+            return []
+    
+    async def get_company_financials(self, symbol: str, quarters: int = 4, earnings_limit: int = 4) -> Dict[str, Any]:
+        """获取公司综合财务数据（整合多个API）
+        
+        Args:
+            symbol: 股票代码
+            quarters: 获取的季度财务数据数量
+            earnings_limit: 获取的盈利惊喜数据点数量
+            
+        Returns:
+            包含多种财务数据的字典
+        """
+        if not self.validate_symbol(symbol):
+            raise ValueError(f"Invalid symbol: {symbol}")
+        
+        # 并行获取所有财务数据
+        basic_financials_task = self.get_basic_financials(symbol)
+        reported_financials_task = self.get_reported_financials(symbol, freq='quarterly' if quarters > 0 else 'annual')
+        earnings_surprises_task = self.get_earnings_surprises(symbol, limit=earnings_limit)
+        recommendation_trends_task = self.get_recommendation_trends(symbol)
+        
+        # 等待所有任务完成
+        results = await asyncio.gather(
+            basic_financials_task,
+            reported_financials_task,
+            earnings_surprises_task,
+            recommendation_trends_task,
+            return_exceptions=True
+        )
+        
+        # 处理结果
+        financials = {
+            "basic_financials": results[0] if not isinstance(results[0], Exception) else {"error": str(results[0])},
+            "reported_financials": results[1] if not isinstance(results[1], Exception) else {"error": str(results[1])},
+            "earnings_surprises": results[2] if not isinstance(results[2], Exception) else {"error": str(results[2])},
+            "recommendation_trends": results[3] if not isinstance(results[3], Exception) else {"error": str(results[3])}
+        }
+        
+        return financials
+    
+    async def get_financial_metrics(self, symbol: str) -> Dict[str, Any]:
+        """提取关键财务指标
+        
+        Args:
+            symbol: 股票代码
+            
+        Returns:
+            关键财务指标字典
+        """
+        try:
+            financials = await self.get_basic_financials(symbol)
+            
+            if "error" in financials:
+                return {"error": financials["error"]}
+            
+            metrics = financials.get("metric", {})
+            
+            # 提取关键指标
+            key_metrics = {
+                "pe_ratio": metrics.get("peBasicExclExtraTTM", None),
+                "eps_ttm": metrics.get("epsBasicExclExtraItemsTTM", None),
+                "dividend_yield": metrics.get("dividendYieldIndicatedAnnual", None),
+                "market_cap": metrics.get("marketCapitalization", None),
+                "52w_high": metrics.get("52WeekHigh", None),
+                "52w_low": metrics.get("52WeekLow", None),
+                "52w_change": metrics.get("52WeekPriceReturnDaily", None),
+                "beta": metrics.get("beta", None),
+                "avg_volume": metrics.get("10DayAverageTradingVolume", None)
             }
-        ]
-        
-        # 如果指定了股票代码，添加相关的模拟新闻
-        if symbol:
-            mock_news.append({
-                "id": f"mock_{symbol}",
-                "title": f"{symbol}公司发布季度财报",
-                "description": f"{symbol}公司最新财报显示业绩符合预期，收入稳定增长。",
-                "url": f"https://example.com/{symbol}-earnings",
-                "published_date": current_date,
-                "source": "模拟新闻源",
-                "tags": ["财报", "收益"],
-                "tickers": [symbol]
-            })
-        
-        return mock_news 
+            
+            return key_metrics
+        except Exception as e:
+            print(f"获取 {symbol} 财务指标失败: {e}")
+            return {"error": str(e)} 
