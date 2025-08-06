@@ -33,12 +33,14 @@ class GPT4oLLM(BaseLLM):
         market_data: Dict[str, Any],
         portfolio_status: Dict[str, Any],
         news_data: List[Dict[str, Any]],
-        historical_context: Optional[Dict[str, Any]] = None
+        historical_context: Optional[Dict[str, Any]] = None,
+        financial_data: Optional[Dict[str, Any]] = None,
+        market_sentiment: Optional[Dict[str, Any]] = None
     ) -> TradingAction:
         """生成交易决策"""
         
         # 构建系统提示
-        system_prompt = """你是一个专业的股票交易AI助手。你需要基于市场数据、投资组合状态和新闻信息来做出交易决策。
+        system_prompt = """你是一个专业的股票交易AI助手。你需要基于市场数据、投资组合状态、新闻信息、市场情绪和财务数据来做出交易决策。
 
         可用的交易行为:
         - buy: 买入股票
@@ -57,11 +59,19 @@ class GPT4oLLM(BaseLLM):
             "parameters": {额外参数}
         }
 
-        请谨慎决策，考虑风险管理和投资组合平衡。不要在回复中包含任何额外的文本或代码块标记，只返回纯JSON对象。"""
+        请谨慎决策，考虑风险管理和投资组合平衡。不要在回复中包含任何额外的文本或代码块标记，只返回纯JSON对象。
+
+        在做出决策时，请特别关注以下方面：
+        1. 财务指标：如市盈率(PE)、每股收益(EPS)、股息收益率等
+        2. 分析师推荐：买入/卖出/持有的比例和趋势
+        3. 盈利惊喜：实际业绩与预期的对比
+        4. 财务报表：资产负债表、利润表的关键指标
+        5. 市场情绪：整体市场情绪、信心指数和风险水平
+        6. 技术指标与市场数据的结合分析"""
         
         # 构建用户提示
         user_prompt = self._build_decision_prompt(
-            market_data, portfolio_status, news_data, historical_context
+            market_data, portfolio_status, news_data, historical_context, financial_data, market_sentiment
         )
         
         try:
@@ -269,7 +279,9 @@ class GPT4oLLM(BaseLLM):
         market_data: Dict[str, Any],
         portfolio_status: Dict[str, Any],
         news_data: List[Dict[str, Any]],
-        historical_context: Optional[Dict[str, Any]] = None
+        historical_context: Optional[Dict[str, Any]] = None,
+        financial_data: Optional[Dict[str, Any]] = None,
+        market_sentiment: Optional[Dict[str, Any]] = None
     ) -> str:
         """构建决策提示"""
         
@@ -287,6 +299,16 @@ class GPT4oLLM(BaseLLM):
         prompt += self.format_news_prompt(news_data)
         prompt += "\n"
         
+        # 财务数据
+        if financial_data:
+            prompt += self.format_financial_data_prompt(financial_data)
+            prompt += "\n"
+        
+        # 市场情绪
+        if market_sentiment:
+            prompt += self.format_market_sentiment_prompt(market_sentiment)
+            prompt += "\n"
+        
         # 历史上下文
         if historical_context:
             prompt += "历史上下文:\n"
@@ -294,6 +316,116 @@ class GPT4oLLM(BaseLLM):
             prompt += f"- 交易历史: {historical_context.get('trade_history', 'N/A')}\n\n"
         
         prompt += "请提供你的交易决策（JSON格式）:"
+        
+        return prompt
+    
+    def format_financial_data_prompt(self, financial_data: Dict[str, Any]) -> str:
+        """格式化财务数据为提示文本"""
+        prompt = "财务数据:\n"
+        
+        # 基本财务指标
+        if "key_metrics" in financial_data:
+            metrics = financial_data["key_metrics"]
+            prompt += "基本财务指标:\n"
+            for name, value in metrics.items():
+                if value is not None:
+                    prompt += f"- {name}: {value}\n"
+        
+        # 盈利惊喜
+        if "earnings_surprises" in financial_data and financial_data["earnings_surprises"]:
+            earnings = financial_data["earnings_surprises"]
+            if isinstance(earnings, list) and len(earnings) > 0:
+                prompt += "\n盈利惊喜数据:\n"
+                for i, quarter in enumerate(earnings[:2]):  # 只显示最近两个季度
+                    prompt += f"- {quarter.get('period', 'N/A')}: 预期 ${quarter.get('estimate', 'N/A')}, 实际 ${quarter.get('actual', 'N/A')}, 惊喜 {quarter.get('surprisePercent', 'N/A')}%\n"
+        
+        # 分析师推荐
+        if "recommendation_trends" in financial_data and financial_data["recommendation_trends"]:
+            trends = financial_data["recommendation_trends"]
+            if isinstance(trends, list) and len(trends) > 0:
+                latest = trends[0]
+                prompt += "\n分析师推荐:\n"
+                prompt += f"- 强烈买入: {latest.get('strongBuy', 'N/A')}\n"
+                prompt += f"- 买入: {latest.get('buy', 'N/A')}\n"
+                prompt += f"- 持有: {latest.get('hold', 'N/A')}\n"
+                prompt += f"- 卖出: {latest.get('sell', 'N/A')}\n"
+                prompt += f"- 强烈卖出: {latest.get('strongSell', 'N/A')}\n"
+        
+        # 财务报表摘要
+        if "reported_financials" in financial_data and "data" in financial_data["reported_financials"]:
+            data = financial_data["reported_financials"]["data"]
+            if isinstance(data, list) and len(data) > 0 and "report" in data[0]:
+                prompt += "\n财务报表摘要:\n"
+                
+                # 资产负债表摘要
+                if "bs" in data[0]["report"]:
+                    bs_items = data[0]["report"]["bs"]
+                    key_bs_items = [
+                        item for item in bs_items 
+                        if any(keyword in item.get("label", "").lower() 
+                              for keyword in ["assets", "liabilities", "equity", "cash", "debt", "revenue", "income", "profit"])
+                    ]
+                    if key_bs_items:
+                        prompt += "资产负债表关键项目:\n"
+                        for item in key_bs_items[:5]:  # 只显示前5个关键项目
+                            prompt += f"- {item.get('label')}: {item.get('value')}\n"
+                
+                # 利润表摘要
+                if "ic" in data[0]["report"]:
+                    ic_items = data[0]["report"]["ic"]
+                    key_ic_items = [
+                        item for item in ic_items 
+                        if any(keyword in item.get("label", "").lower() 
+                              for keyword in ["revenue", "income", "profit", "margin", "earnings", "sales"])
+                    ]
+                    if key_ic_items:
+                        prompt += "利润表关键项目:\n"
+                        for item in key_ic_items[:5]:  # 只显示前5个关键项目
+                            prompt += f"- {item.get('label')}: {item.get('value')}\n"
+        
+        return prompt
+    
+    def format_market_sentiment_prompt(self, market_sentiment: Dict[str, Any]) -> str:
+        """格式化市场情绪数据为提示文本"""
+        prompt = "市场情绪分析:\n"
+        
+        # 整体情绪
+        overall_sentiment = market_sentiment.get("overall_sentiment", "neutral")
+        sentiment_map = {
+            "positive": "积极",
+            "negative": "消极",
+            "neutral": "中性",
+            "bullish": "看涨",
+            "bearish": "看跌"
+        }
+        translated_sentiment = sentiment_map.get(overall_sentiment, overall_sentiment)
+        prompt += f"- 整体情绪: {translated_sentiment}\n"
+        
+        # 信心指数
+        confidence = market_sentiment.get("confidence", 0.5)
+        prompt += f"- 信心指数: {confidence:.2f}\n"
+        
+        # 风险水平
+        risk_level = market_sentiment.get("risk_level", "medium")
+        risk_map = {
+            "low": "低",
+            "medium": "中",
+            "high": "高"
+        }
+        translated_risk = risk_map.get(risk_level, risk_level)
+        prompt += f"- 风险水平: {translated_risk}\n"
+        
+        # 关键因素
+        key_factors = market_sentiment.get("key_factors", [])
+        if key_factors:
+            prompt += "- 关键因素:\n"
+            for factor in key_factors[:3]:  # 只显示前3个因素
+                prompt += f"  * {factor}\n"
+        
+        # 建议
+        recommendation = market_sentiment.get("recommendation", "")
+        if recommendation:
+            prompt += f"- 建议: {recommendation}\n"
         
         return prompt
     

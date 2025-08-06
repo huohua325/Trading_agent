@@ -1,5 +1,6 @@
 import os
 from typing import Dict, Any, Optional
+from dotenv import load_dotenv
 from ..config.config import TradingConfig
 from ..agents.trading_agent import TradingAgent
 from ..brokers.backtrader_broker import BacktraderBroker
@@ -129,16 +130,78 @@ def print_trade_result(result: Dict[str, Any]):
 
 def check_environment() -> bool:
     """检查环境配置"""
-    required_vars = ['OPENAI_API_KEY', 'TIINGO_API_KEY']
-    missing_vars = []
+    load_dotenv()
     
-    for var in required_vars:
-        if not os.getenv(var):
-            missing_vars.append(var)
-    
-    if missing_vars:
-        print(f"缺少必需的环境变量: {', '.join(missing_vars)}")
-        print("请在 .env 文件中设置这些变量")
+    # 检查Finnhub API密钥
+    finnhub_api_key = os.getenv("FINNHUB_API_KEY")
+    if not finnhub_api_key:
+        print("❌ 未找到Finnhub API密钥，请在.env文件中设置FINNHUB_API_KEY")
         return False
     
-    return True 
+    # 检查OpenAI API密钥
+    openai_api_key = os.getenv("OPENAI_API_KEY")
+    if not openai_api_key:
+        print("❌ 未找到OpenAI API密钥，请在.env文件中设置OPENAI_API_KEY")
+        return False
+    
+    return True
+
+
+def print_financial_data_summary(financial_data: Dict[str, Any]) -> None:
+    """打印财务数据摘要"""
+    if not financial_data:
+        print("❌ 无财务数据可用")
+        return
+    
+    print("📈 财务数据摘要:")
+    
+    # 打印关键财务指标
+    if "key_metrics" in financial_data:
+        metrics = financial_data["key_metrics"]
+        if "error" in metrics:
+            print(f"  关键指标: 获取失败 ({metrics['error']})")
+        else:
+            print("  关键财务指标:")
+            important_metrics = [
+                ("pe_ratio", "市盈率"),
+                ("eps_ttm", "每股收益(TTM)"),
+                ("dividend_yield", "股息收益率"),
+                ("market_cap", "市值"),
+                ("beta", "贝塔系数")
+            ]
+            for key, label in important_metrics:
+                if key in metrics and metrics[key] is not None:
+                    print(f"    {label}: {metrics[key]}")
+    
+    # 打印盈利惊喜
+    if "earnings_surprises" in financial_data and financial_data["earnings_surprises"]:
+        earnings = financial_data["earnings_surprises"]
+        if isinstance(earnings, list) and len(earnings) > 0:
+            print("  盈利惊喜:")
+            latest = earnings[0]
+            print(f"    最新季度: {latest.get('period', 'N/A')}")
+            print(f"    预期EPS: ${latest.get('estimate', 'N/A')}")
+            print(f"    实际EPS: ${latest.get('actual', 'N/A')}")
+            print(f"    惊喜百分比: {latest.get('surprisePercent', 'N/A')}%")
+    
+    # 打印分析师推荐
+    if "recommendation_trends" in financial_data and financial_data["recommendation_trends"]:
+        trends = financial_data["recommendation_trends"]
+        if isinstance(trends, list) and len(trends) > 0:
+            latest = trends[0]
+            print("  分析师推荐:")
+            buy_count = latest.get('strongBuy', 0) + latest.get('buy', 0)
+            sell_count = latest.get('strongSell', 0) + latest.get('sell', 0)
+            hold_count = latest.get('hold', 0)
+            total = buy_count + sell_count + hold_count
+            
+            if total > 0:
+                buy_pct = (buy_count / total) * 100
+                sell_pct = (sell_count / total) * 100
+                hold_pct = (hold_count / total) * 100
+                
+                print(f"    买入: {buy_count} ({buy_pct:.1f}%)")
+                print(f"    持有: {hold_count} ({hold_pct:.1f}%)")
+                print(f"    卖出: {sell_count} ({sell_pct:.1f}%)")
+            else:
+                print("    无分析师推荐数据") 
