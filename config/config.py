@@ -30,6 +30,13 @@ class TradingConfig(BaseModel):
     
     # Finnhub配置
     finnhub_api_key: str = os.getenv("FINNHUB_API_KEY", "")
+    finnhub_historical_days: int = 365  # 历史价格数据获取天数限制
+    finnhub_price_resolution: str = "D"  # 价格数据分辨率(1, 5, 15, 30, 60, D, W, M)
+    finnhub_api_calls_per_minute: int = 45  # 每分钟API调用次数(设为45以留有余量)
+    finnhub_financial_quarters: int = 4  # 获取财务数据的季度数
+    finnhub_earnings_limit: int = 4  # 盈利惊喜数据的限制
+    finnhub_cache_duration: int = 3600  # 数据缓存时间(秒)
+    finnhub_data_cache_enabled: bool = True  # 是否启用数据缓存
     
     # 模拟盘配置
     broker_type: str = "backtrader"
@@ -69,5 +76,28 @@ class TradingConfig(BaseModel):
             
         if self.initial_cash <= 0:
             raise ValueError("Initial cash must be positive")
+            
+        # 验证Finnhub特定配置
+        if self.data_source_type == "finnhub":
+            self.validate_finnhub_config()
+            
+        return True
+        
+    def validate_finnhub_config(self) -> bool:
+        """验证Finnhub配置有效性"""
+        if self.finnhub_historical_days <= 0:
+            raise ValueError("历史数据天数必须为正数")
+            
+        if self.finnhub_price_resolution not in ["1", "5", "15", "30", "60", "D", "W", "M"]:
+            raise ValueError("价格分辨率必须是有效值: 1, 5, 15, 30, 60, D, W, M")
+            
+        if self.finnhub_api_calls_per_minute <= 0 or self.finnhub_api_calls_per_minute > 50:
+            raise ValueError("API调用频率必须在1-50次/分钟之间")
+            
+        if self.finnhub_financial_quarters <= 0:
+            raise ValueError("财务数据季度数必须为正数")
+            
+        if self.finnhub_earnings_limit <= 0:
+            raise ValueError("盈利惊喜数据限制必须为正数")
             
         return True 
