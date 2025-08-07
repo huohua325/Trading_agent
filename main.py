@@ -6,6 +6,7 @@
     python main.py --mode single    # 运行单个交易周期
     python main.py --mode continuous --duration 2  # 连续交易2小时
     python main.py --mode demo      # 演示模式
+    python main.py --mode backtest --start_date 2025-03-01 --end_date 2025-07-31 --symbols AAPL,MSFT,GOOGL  # 回测模式
 """
 
 import asyncio
@@ -14,11 +15,13 @@ import sys
 import os
 import json
 import pickle
-from typing import Optional
-from datetime import datetime
+from typing import Optional, List
+from datetime import datetime, timedelta
 
 from trading_agent.utils.helpers import create_agent, check_environment, print_portfolio_summary, print_trade_result, print_financial_data_summary
 from trading_agent.actions.action_types import TradingAction, ActionType
+from trading_agent.data_sources.backtest_data_source import BacktestDataSource
+from trading_agent.brokers.backtest_broker import BacktestBroker
 
 
 # 保存和恢复会话的函数
@@ -750,12 +753,194 @@ async def run_demo():
         await agent.stop_trading()
 
 
+async def run_backtest(start_date: str, end_date: str, symbols: List[str], interval: str = "1d"):
+    """回测模式
+    
+    Args:
+        start_date: 回测开始日期，格式：YYYY-MM-DD
+        end_date: 回测结束日期，格式：YYYY-MM-DD
+        symbols: 交易股票列表
+        interval: 回测时间间隔，如'1d'表示日线回测
+    """
+    print(f"🤖 启动交易代理 - 回测模式 ({start_date} 到 {end_date})")
+    
+    # 检查环境
+    if not check_environment():
+        return
+    
+    # 创建回测专用数据源和Broker
+    data_source_config = {
+        "start_date": start_date,
+        "end_date": end_date,
+        "data_dir": "backtest_data"
+    }
+    
+    broker_config = {
+        "initial_balance": 100000.0,
+        "commission_rate": 0.001,  # 0.1%佣金率
+        "slippage": 0.001  # 0.1%滑点
+    }
+    
+    data_source = BacktestDataSource(data_source_config)
+    broker = BacktestBroker(broker_config)
+    
+    # 创建回测专用代理
+    config = {
+        "trading_symbols": symbols,
+        "trading_interval": 0  # 回测模式下不需要等待
+    }
+    
+    # 创建代理
+    from trading_agent.llm.gpt4o_llm import GPT4oLLM
+    llm = GPT4oLLM({})
+    
+    from trading_agent.agents.trading_agent import TradingAgent
+    agent = TradingAgent(broker=broker, data_source=data_source, llm=llm, config=config)
+    
+    # 设置Broker的价格数据源
+    broker.set_price_data_source(data_source)
+    
+    try:
+        # 初始化
+        if not await agent.initialize():
+            print("❌ 代理初始化失败")
+            return
+        
+        # 加载回测数据
+        print("📊 加载回测数据...")
+        await data_source.load_data(symbols)
+        
+        # 启动交易
+        if not await agent.start_trading():
+            print("❌ 启动交易失败")
+            return
+        
+        # 显示初始状态
+        print("\n📊 初始投资组合状态:")
+        data_source.set_current_date(start_date)
+        broker.set_current_date(start_date)
+        initial_portfolio = await agent.get_portfolio_status()
+        print_portfolio_summary(initial_portfolio)
+        
+        # 回测主循环
+        current_date = datetime.strptime(start_date, "%Y-%m-%d")
+        end_datetime = datetime.strptime(end_date, "%Y-%m-%d")
+        
+        cycle_count = 0
+        
+        while current_date <= end_datetime:
+            print(f"\n📅 当前回测日期: {current_date.strftime('%Y-%m-%d')}")
+            
+            # 设置当前回测日期
+            data_source.set_current_date(current_date)
+            broker.set_current_date(current_date)
+            
+            # 运行一个交易周期
+            result = await agent.run_trading_cycle()
+            cycle_count += 1
+            
+            # 显示结果
+            execution_result = result.get('execution_result', {})
+            if execution_result.get('action') in ['buy', 'sell']:
+                print_trade_result(execution_result)
+            
+            # 更新日期
+            if interval == "1d":
+                current_date += timedelta(days=1)
+            elif interval == "1h":
+                current_date += timedelta(hours=1)
+            elif interval == "1w":
+                current_date += timedelta(days=7)
+            else:
+                current_date += timedelta(days=1)
+            
+            # 每10个周期打印一次状态报告
+            if cycle_count % 10 == 0:
+                portfolio = await agent.get_portfolio_status()
+                print(f"\n状态报告 #{cycle_count // 10}")
+                print(f"已完成 {cycle_count} 个交易周期")
+                print(f"当前投资组合价值: ${portfolio.get('total_value', 0):,.2f}")
+                print(f"收益率: {portfolio.get('return_percent', 0):+.2f}%")
+        
+        # 回测结束，显示性能分析
+        print("\n" + "=" * 50)
+        print("📈 回测结果分析")
+        print("=" * 50)
+        
+        # 获取性能分析
+        analysis = await agent.analyze_performance()
+        
+        # 显示基本指标
+        print("\n📊 基本绩效指标:")
+        metrics = analysis.get('basic_metrics', {})
+        print(f"  总收益: ${metrics.get('total_return', 0):,.2f}")
+        print(f"  收益率: {metrics.get('total_return_percent', 0):+.2f}%")
+        print(f"  交易次数: {metrics.get('number_of_trades', 0)}")
+        print(f"  成功交易: {metrics.get('successful_trades', 0)}")
+        print(f"  胜率: {metrics.get('win_rate', 0):.2f}%")
+        
+        # 显示风险指标
+        print("\n📉 风险指标:")
+        risk_metrics = metrics.get('max_drawdown', 0)
+        print(f"  最大回撤: {risk_metrics:.2f}%")
+        print(f"  夏普比率: {metrics.get('sharpe_ratio', 0):.2f}")
+        print(f"  索提诺比率: {metrics.get('sortino_ratio', 0):.2f}")
+        
+        # 显示最终投资组合状态
+        print("\n💼 最终投资组合状态:")
+        final_portfolio = await agent.get_portfolio_status()
+        print_portfolio_summary(final_portfolio)
+        
+        # 显示收益变化
+        if initial_portfolio and final_portfolio:
+            initial_value = initial_portfolio.get('total_value', 0)
+            final_value = final_portfolio.get('total_value', 0)
+            if initial_value > 0:
+                change = final_value - initial_value
+                change_percent = (change / initial_value) * 100
+                print(f"\n💹 总收益: ${change:+,.2f} ({change_percent:+.2f}%)")
+        
+        # 保存回测结果
+        backtest_result = {
+            "start_date": start_date,
+            "end_date": end_date,
+            "symbols": symbols,
+            "initial_balance": broker_config["initial_balance"],
+            "final_balance": final_portfolio.get('total_value', 0),
+            "total_return": metrics.get('total_return', 0),
+            "total_return_percent": metrics.get('total_return_percent', 0),
+            "number_of_trades": metrics.get('number_of_trades', 0),
+            "successful_trades": metrics.get('successful_trades', 0),
+            "win_rate": metrics.get('win_rate', 0),
+            "max_drawdown": risk_metrics,
+            "sharpe_ratio": metrics.get('sharpe_ratio', 0),
+            "sortino_ratio": metrics.get('sortino_ratio', 0),
+            "portfolio_value_history": broker.portfolio_value_history,
+            "trade_history": broker.trade_history
+        }
+        
+        # 确保logs目录存在
+        os.makedirs("logs", exist_ok=True)
+        
+        # 保存回测结果
+        with open(os.path.join("logs", "backtest_result.json"), "w", encoding="utf-8") as f:
+            json.dump(backtest_result, f, ensure_ascii=False, indent=2, default=str)
+        
+        print("\n✅ 回测完成! 结果已保存到 logs/backtest_result.json")
+        
+    except Exception as e:
+        print(f"❌ 回测出错: {e}")
+    finally:
+        await agent.stop_trading()
+        print("🛑 回测会话已结束")
+
+
 def main():
     """主函数"""
     parser = argparse.ArgumentParser(description="AI交易代理")
     parser.add_argument(
         "--mode", 
-        choices=["single", "continuous", "demo"],
+        choices=["single", "continuous", "demo", "backtest"],
         default="demo",
         help="运行模式"
     )
@@ -769,6 +954,29 @@ def main():
         action="store_true",
         help="恢复之前中断的交易会话"
     )
+    parser.add_argument(
+        "--start_date",
+        type=str,
+        help="回测开始日期 (YYYY-MM-DD)"
+    )
+    parser.add_argument(
+        "--end_date",
+        type=str,
+        help="回测结束日期 (YYYY-MM-DD)"
+    )
+    parser.add_argument(
+        "--symbols",
+        type=str,
+        default="AAPL,MSFT,GOOGL",
+        help="回测股票代码，逗号分隔"
+    )
+    parser.add_argument(
+        "--interval",
+        type=str,
+        default="1d",
+        choices=["1d", "1h", "1w"],
+        help="回测时间间隔"
+    )
     
     args = parser.parse_args()
     
@@ -779,6 +987,15 @@ def main():
             asyncio.run(run_continuous_trading(args.duration, args.resume))
         elif args.mode == "demo":
             asyncio.run(run_demo())
+        elif args.mode == "backtest":
+            if not args.start_date or not args.end_date:
+                print("❌ 回测模式需要指定开始和结束日期")
+                sys.exit(1)
+            
+            # 解析股票代码列表
+            symbols = args.symbols.split(",")
+            
+            asyncio.run(run_backtest(args.start_date, args.end_date, symbols, args.interval))
     except KeyboardInterrupt:
         print("\n👋 程序被用户中断")
         sys.exit(0)

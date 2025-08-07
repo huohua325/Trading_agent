@@ -144,7 +144,7 @@ def check_environment() -> bool:
         print("❌ 未找到OpenAI API密钥，请在.env文件中设置OPENAI_API_KEY")
         return False
     
-    return True
+    return True 
 
 
 def print_financial_data_summary(financial_data: Dict[str, Any]) -> None:

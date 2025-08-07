@@ -22,7 +22,7 @@ class TradingConfig(BaseModel):
     temperature: float = 0.1
     
     # 数据源配置
-    data_source_type: Literal["tiingo", "finnhub"] = "finnhub"  # 默认使用Finnhub
+    data_source_type: Literal["tiingo", "finnhub", "yfinance"] = "finnhub"  # 默认使用yfinance
     
     # Tiingo配置
     tiingo_api_key: str = os.getenv("TIINGO_API_KEY", "")
@@ -35,7 +35,7 @@ class TradingConfig(BaseModel):
     finnhub_api_calls_per_minute: int = 45  # 每分钟API调用次数(设为45以留有余量)
     finnhub_financial_quarters: int = 4  # 获取财务数据的季度数
     finnhub_earnings_limit: int = 4  # 盈利惊喜数据的限制
-    finnhub_cache_duration: int = 3600  # 数据缓存时间(秒)
+    finnhub_cache_duration: int = 0  # 数据缓存时间(秒)
     finnhub_data_cache_enabled: bool = True  # 是否启用数据缓存
     
     # 模拟盘配置

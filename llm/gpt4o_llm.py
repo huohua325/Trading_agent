@@ -307,7 +307,7 @@ class GPT4oLLM(BaseLLM):
         # 市场情绪
         if market_sentiment:
             prompt += self.format_market_sentiment_prompt(market_sentiment)
-            prompt += "\n"
+        prompt += "\n"
         
         # 历史上下文
         if historical_context:

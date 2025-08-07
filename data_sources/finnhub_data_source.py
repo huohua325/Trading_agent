@@ -231,7 +231,7 @@ class FinnhubDataSource(BaseDataSource):
             return quote.get('c', 0) > 0
         except:
             return False
-
+    
     async def get_basic_financials(self, symbol: str) -> Dict[str, Any]:
         """获取基本财务数据
         

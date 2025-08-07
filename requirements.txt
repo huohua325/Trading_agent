@@ -9,3 +9,7 @@ aiohttp>=3.8.0
 asyncio
 typing-extensions 
 finnhub-python
+yfinance>=0.2.0
+pytz>=2022.1
+python-dateutil>=2.8.2
+matplotlib
