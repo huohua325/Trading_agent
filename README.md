@@ -1,11 +1,11 @@
 # AI交易代理框架
 
-一个模块化的AI驱动交易代理框架，支持多种数据源、经纪人和LLM的组合。
+一个模块化的AI驱动交易代理框架，支持多种数据源、经纪人和大语言模型的灵活组合。
 
 ## 📋 功能特性
 
 - **模块化架构**: 三大独立模块（数据源、经纪人、LLM）可灵活替换
-- **多种交易行为**: 买入、卖出、观望、获取信息、获取新闻
+- **全面交易行为**: 买入、卖出、观望、信息检索和新闻分析
 - **风险管理**: 内置风险评估和限制机制
 - **实时决策**: 基于市场数据和新闻的AI驱动决策
 - **性能分析**: 完整的交易历史和绩效指标
@@ -26,23 +26,23 @@ trading_agent/
 └── main.py           # 主程序入口
 ```
 
-### 三大核心模块
+### 核心模块
 
 1. **数据源模块** (`data_sources/`)
    - 基础抽象类: `BaseDataSource`
    - Tiingo实现: `TiingoDataSource`
    - Finnhub实现: `FinnhubDataSource`
-   - 支持历史数据、实时价格、市场信息、新闻数据
+   - 支持历史数据、实时价格、市场信息和新闻数据
 
 2. **经纪人模块** (`brokers/`)
    - 基础抽象类: `BaseBroker`
    - Backtrader实现: `BacktraderBroker`（简化实现，主要用于资金管理和交易执行）
-   - 支持交易执行、投资组合管理、绩效分析
+   - 支持交易执行、投资组合管理和绩效分析
 
 3. **LLM模块** (`llm/`)
    - 基础抽象类: `BaseLLM`
    - GPT-4o实现: `GPT4oLLM`
-   - 支持交易决策、情绪分析、风险评估
+   - 支持交易决策、情绪分析和风险评估
 
 ## 🚀 快速开始
 
@@ -86,6 +86,9 @@ python -m trading_agent.main --mode single
 
 # 连续交易2小时
 python -m trading_agent.main --mode continuous --duration 2
+
+# 恢复中断的连续交易会话
+python -m trading_agent.main --mode continuous --duration 2 --resume
 ```
 
 ## 📊 使用示例
@@ -151,9 +154,9 @@ llm = GPT4oLLM(config.to_dict())
 agent = TradingAgent(broker, data_source, llm, config.to_dict())
 ```
 
-## 🎯 Action Space
+## 🎯 交易行为空间
 
-框架支持5种交易行为：
+框架支持五种交易行为：
 
 1. **buy** - 买入股票
 2. **sell** - 卖出股票
@@ -206,7 +209,7 @@ agent = TradingAgent(broker, data_source, llm, config.to_dict())
 ```python
 from trading_agent.data_sources.base_data_source import BaseDataSource
 
-class YourDataSource(BaseDataSource):
+class CustomDataSource(BaseDataSource):
     async def get_historical_data(self, symbol, start_date, end_date, interval="1D"):
         # 实现您的数据获取逻辑
         pass
@@ -223,7 +226,7 @@ class YourDataSource(BaseDataSource):
 ```python
 from trading_agent.brokers.base_broker import BaseBroker
 
-class YourBroker(BaseBroker):
+class CustomBroker(BaseBroker):
     async def execute_action(self, action):
         # 实现交易执行逻辑
         pass
@@ -240,7 +243,7 @@ class YourBroker(BaseBroker):
 ```python
 from trading_agent.llm.base_llm import BaseLLM
 
-class YourLLM(BaseLLM):
+class CustomLLM(BaseLLM):
     async def generate_trading_decision(self, market_data, portfolio_status, news_data, historical_context=None):
         # 实现决策生成逻辑
         pass
