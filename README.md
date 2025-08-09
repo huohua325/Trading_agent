@@ -5,6 +5,7 @@
 ## 📋 功能特性
 
 - **模块化架构**: 三大独立模块（数据源、经纪人、LLM）可自由替换
+- **多数据源支持**: 集成 Finnhub、Polygon.io、Alpha Vantage、Tiingo、Quandl 等多个数据源，确保数据完整性
 - **历史回测** : 内置本地 CSV / 在线 API（Finnhub、yfinance）两种模式，一键评估策略
 - **全面交易行为**: 买入、卖出、观望、信息检索、新闻分析
 - **风险管理**: AI 风控 + 多指标绩效评估（CAGR、Max DD、Sharpe、Sortino、Profit Factor、Expectancy）
@@ -12,6 +13,7 @@
 - **性能分析**: 交易历史 & 图表 & 指标一站式输出
 - **数据缓存**: 智能缓存减少 API 调用
 - **API限制管理**: 自动限流，避免触发配额
+- **数据源优先级**: 智能故障转移，确保数据获取的可靠性
 
 ## 🏗️ 架构设计
 
@@ -62,17 +64,33 @@ pip install -r requirements.txt
 
 ### 2. 环境配置
 
-创建 `.env` 文件在项目根目录：
+复制 `config_example.env` 为 `.env` 文件在项目根目录，并填入你的API密钥：
 
 ```env
-# OpenAI API密钥（必需）
+# OpenAI API配置
 OPENAI_API_KEY=your_openai_api_key_here
 
-# 数据源API密钥（选择一个）
+# 数据源API密钥配置（可选择性配置）
+# Finnhub (免费额度: 60次/分钟)
 FINNHUB_API_KEY=your_finnhub_api_key_here
-# 或
+
+# Polygon.io (免费额度: 5次/分钟)
+POLYGON_API_KEY=your_polygon_api_key_here
+
+# Alpha Vantage (免费额度: 5次/分钟, 500次/天)
+ALPHA_VANTAGE_API_KEY=your_alpha_vantage_api_key_here
+
+# Tiingo (付费, 但便宜)
 TIINGO_API_KEY=your_tiingo_api_key_here
+
+# Quandl (部分免费)
+QUANDL_API_KEY=your_quandl_api_key_here
+
+# NewsAPI (免费额度: 100次/天)
+NEWS_API_KEY=your_news_api_key_here
 ```
+
+**注意**: 系统会按优先级自动选择可用的数据源，配置的API密钥越多，数据获取的成功率越高。
 
 ### 3. 运行示例
 
@@ -108,6 +126,61 @@ python trading_agent/run_backtest.py \
   --symbols AAPL,MSFT,GOOGL \
   --api_backtest
 ```
+
+### 5. 多数据源数据下载（新增）
+
+```bash
+# 下载历史数据用于回测
+python trading_agent/examples/multi_source_data_download_example.py
+
+# 测试所有API并对比数据质量
+python trading_agent/test_all_apis.py
+
+# 或者直接使用DataDownloader类
+python -c "
+import asyncio
+from trading_agent.data_sources.data_downloader import DataDownloader
+
+async def download():
+    downloader = DataDownloader()
+    await downloader.download_all_data(
+        symbols=['AAPL', 'MSFT', 'GOOGL'],
+        start_date='2025-03-01',
+        end_date='2025-07-31'
+    )
+
+asyncio.run(download())
+"
+```
+
+#### 测试所有API模式
+
+测试所有API模式会为每个数据源创建单独的目录，方便对比数据质量：
+
+```bash
+# 运行测试所有API模式
+python trading_agent/test_all_apis.py
+```
+
+测试完成后，会在 `api_test_results/` 目录下创建以下结构：
+```
+api_test_results/
+├── test_yfinance/          # YFinance数据
+│   ├── AAPL_prices.csv
+│   ├── AAPL_info.json
+│   ├── AAPL_financials.json
+│   └── test_results.json
+├── test_finnhub/           # Finnhub数据
+│   ├── AAPL_prices.csv
+│   ├── AAPL_info.json
+│   ├── AAPL_financials.json
+│   └── test_results.json
+├── test_polygon/           # Polygon.io数据
+│   └── ...
+└── ...
+```
+
+每个API目录下的 `test_results.json` 包含该API的测试结果和成功率统计。
 
 回测结束后将输出核心指标并在 `logs/` 生成：
 
@@ -228,6 +301,22 @@ agent = TradingAgent(broker, data_source, llm, config.to_dict())
 - `finnhub_data_cache_enabled`: 是否启用数据缓存（默认：True）
 
 ## 🔧 扩展框架
+
+### 多数据源系统
+
+系统支持多个数据源的智能切换和故障转移：
+
+```python
+# 数据源优先级配置
+data_sources = {
+    "price": ["yfinance", "finnhub", "polygon", "alpha_vantage", "tiingo"],
+    "news": ["finnhub", "newsapi", "yfinance"],
+    "financials": ["yfinance", "finnhub", "alpha_vantage"],
+    "market_info": ["yfinance", "finnhub", "polygon"]
+}
+
+# 系统会自动按优先级尝试数据源，直到成功获取数据
+```
 
 ### 添加新的数据源
 
