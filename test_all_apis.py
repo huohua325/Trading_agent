@@ -62,7 +62,7 @@ async def test_all_apis():
         print("📊 测试结果汇总:")
         
         # 读取并显示每个API的测试结果
-        for api in ["yfinance", "finnhub", "polygon", "alpha_vantage", "tiingo"]:
+        for api in ["yfinance", "finnhub", "polygon", "alpha_vantage", "tiingo", "quandl"]:
             result_file = os.path.join(downloader.output_dir, f"test_{api}", "test_results.json")
             if os.path.exists(result_file):
                 import json
@@ -110,4 +110,4 @@ if __name__ == "__main__":
     asyncio.run(test_all_apis())
     
     # 运行数据质量对比
-    asyncio.run(compare_data_quality()) 
+    # asyncio.run(compare_data_quality()) 

@@ -38,7 +38,7 @@ class DataDownloader:
         
         # 数据源优先级配置
         self.data_sources = {
-            "price": ["yfinance", "finnhub", "polygon", "alpha_vantage", "tiingo"],
+            "price": ["yfinance", "finnhub", "polygon", "alpha_vantage", "tiingo", "quandl"],
             "news": ["finnhub", "newsapi", "yfinance"],
             "financials": ["yfinance", "finnhub", "alpha_vantage", "tiingo"],
             "market_info": ["yfinance", "finnhub", "polygon", "alpha_vantage", "tiingo"]
@@ -162,6 +162,7 @@ class DataDownloader:
             "polygon": {"enabled": bool(self.api_keys["polygon"]), "name": "Polygon.io"},
             "alpha_vantage": {"enabled": bool(self.api_keys["alpha_vantage"]), "name": "Alpha Vantage"},
             "tiingo": {"enabled": bool(self.api_keys["tiingo"]), "name": "Tiingo"},
+            "quandl": {"enabled": bool(self.api_keys["quandl"]), "name": "Quandl"},
             "newsapi": {"enabled": bool(self.api_keys["newsapi"]), "name": "NewsAPI"}
         }
         
@@ -316,6 +317,8 @@ class DataDownloader:
                     df = await self._download_price_alpha_vantage(symbol, start_date, end_date)
                 elif source == "tiingo" and self.api_keys["tiingo"]:
                     df = await self._download_price_tiingo(symbol, start_date, end_date)
+                elif source == "quandl" and self.api_keys["quandl"]:
+                    df = await self._download_price_quandl(symbol, start_date, end_date)
                 
                 if df is not None and not df.empty:
                     output_path = os.path.join(self.output_dir, f"{symbol}_prices.csv")
@@ -526,6 +529,58 @@ class DataDownloader:
                 
         except Exception as e:
             logger.error(f"Tiingo价格数据下载失败: {e}")
+            return None
+    
+    async def _download_price_quandl(self, symbol: str, start_date: str, end_date: str) -> Optional[pd.DataFrame]:
+        """使用Quandl下载价格数据"""
+        await self._rate_limit("quandl")
+        
+        try:
+            # Quandl免费API限制非常严格，大部分数据集都需要付费
+            # 我们尝试一个简单的测试数据集
+            url = "https://www.quandl.com/api/v3/datasets/ODA/POILWTI.json"  # 原油价格数据
+            params = {
+                "api_key": self.api_keys["quandl"],
+                "start_date": start_date,
+                "end_date": end_date,
+                "order": "asc"
+            }
+            
+            async with aiohttp.ClientSession() as session:
+                data = await self._make_api_request(session, url, params)
+                
+                if data and data.get("dataset_data"):
+                    dataset_data = data["dataset_data"]
+                    data_points = dataset_data.get("data", [])
+                    
+                    if data_points:
+                        df_data = []
+                        for point in data_points:
+                            if len(point) >= 2:
+                                df_data.append({
+                                    "Date": point[0],
+                                    "Value": point[1]
+                                })
+                        
+                        if df_data:
+                            df = pd.DataFrame(df_data)
+                            df["Date"] = pd.to_datetime(df["Date"])
+                            df.set_index("Date", inplace=True)
+                            # 重命名列以匹配标准格式
+                            df = df.rename(columns={"Value": "Close"})
+                            # 添加其他必需的列
+                            df["Open"] = df["Close"]
+                            df["High"] = df["Close"]
+                            df["Low"] = df["Close"]
+                            df["Volume"] = 0
+                            return df
+                
+                # 如果API调用失败，返回None
+                logger.warning("Quandl API免费版限制严格，建议升级或使用其他数据源")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Quandl价格数据下载失败: {e}")
             return None
     
     async def download_market_info_multi_source(self, symbol: str):
