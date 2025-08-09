@@ -225,9 +225,14 @@ class DataDownloader:
         print(f"  📊 测试价格数据...")
         for symbol in symbols[:2]:  # 只测试前2个股票以节省时间
             try:
-                await api_downloader.download_price_data_multi_source(symbol, start_date, end_date)
-                results["price_data"][symbol] = True
-                print(f"    ✅ {symbol}: 成功")
+                price_results = await api_downloader.download_price_data_multi_source(symbol, start_date, end_date, test_mode=True)
+                # 检查是否有成功的数据源
+                success = any(result.get("success", False) for result in price_results.values()) if price_results else False
+                results["price_data"][symbol] = success
+                if success:
+                    print(f"    ✅ {symbol}: 成功")
+                else:
+                    print(f"    ❌ {symbol}: 失败")
             except Exception as e:
                 results["price_data"][symbol] = False
                 print(f"    ❌ {symbol}: 失败 - {str(e)[:50]}...")
@@ -236,9 +241,14 @@ class DataDownloader:
         print(f"  📋 测试市场信息...")
         for symbol in symbols[:2]:
             try:
-                await api_downloader.download_market_info_multi_source(symbol)
-                results["market_info"][symbol] = True
-                print(f"    ✅ {symbol}: 成功")
+                info_results = await api_downloader.download_market_info_multi_source(symbol, test_mode=True)
+                # 检查是否有成功的数据源
+                success = any(result.get("success", False) for result in info_results.values()) if info_results else False
+                results["market_info"][symbol] = success
+                if success:
+                    print(f"    ✅ {symbol}: 成功")
+                else:
+                    print(f"    ❌ {symbol}: 失败")
             except Exception as e:
                 results["market_info"][symbol] = False
                 print(f"    ❌ {symbol}: 失败 - {str(e)[:50]}...")
@@ -248,9 +258,14 @@ class DataDownloader:
             print(f"  💰 测试财务数据...")
             for symbol in symbols[:2]:
                 try:
-                    await api_downloader.download_financial_data_multi_source(symbol)
-                    results["financial_data"][symbol] = True
-                    print(f"    ✅ {symbol}: 成功")
+                    financial_results = await api_downloader.download_financial_data_multi_source(symbol, test_mode=True)
+                    # 检查是否有成功的数据源
+                    success = any(result.get("success", False) for result in financial_results.values()) if financial_results else False
+                    results["financial_data"][symbol] = success
+                    if success:
+                        print(f"    ✅ {symbol}: 成功")
+                    else:
+                        print(f"    ❌ {symbol}: 失败")
                 except Exception as e:
                     results["financial_data"][symbol] = False
                     print(f"    ❌ {symbol}: 失败 - {str(e)[:50]}...")
@@ -259,9 +274,14 @@ class DataDownloader:
         if include_news and api in ["finnhub", "newsapi", "yfinance"]:
             print(f"  📰 测试新闻数据...")
             try:
-                await api_downloader.download_news_data_multi_source(symbols[:2], start_date, end_date, limit=20)
-                results["news_data"] = True
-                print(f"    ✅ 成功")
+                news_results = await api_downloader.download_news_data_multi_source(symbols[:2], start_date, end_date, limit=20, test_mode=True)
+                # 检查是否有成功的数据源
+                success = any(result.get("success", False) for result in news_results.values()) if news_results else False
+                results["news_data"] = success
+                if success:
+                    print(f"    ✅ 成功")
+                else:
+                    print(f"    ❌ 失败")
             except Exception as e:
                 results["news_data"] = False
                 print(f"    ❌ 失败 - {str(e)[:50]}...")
@@ -300,9 +320,12 @@ class DataDownloader:
         
         print(f"  📄 详细结果已保存到: {result_file}")
     
-    async def download_price_data_multi_source(self, symbol: str, start_date: str, end_date: str):
+    async def download_price_data_multi_source(self, symbol: str, start_date: str, end_date: str, test_mode: bool = False):
         """多数据源下载价格数据"""
         print(f"多数据源下载 {symbol} 价格数据...")
+        
+        results = {}
+        successful_source = None
         
         for source in self.data_sources["price"]:
             try:
@@ -320,17 +343,48 @@ class DataDownloader:
                 elif source == "quandl" and self.api_keys["quandl"]:
                     df = await self._download_price_quandl(symbol, start_date, end_date)
                 
+                # 记录每个数据源的结果
                 if df is not None and not df.empty:
-                    output_path = os.path.join(self.output_dir, f"{symbol}_prices.csv")
-                    df.to_csv(output_path)
-                    print(f"✅ {symbol} 价格数据已保存 ({source}): {len(df)} 行")
-                    return
+                    results[source] = {"success": True, "data": df, "rows": len(df)}
+                    if successful_source is None:
+                        successful_source = source
+                        if not test_mode:
+                            # 非测试模式下，找到第一个成功的数据源就保存并返回
+                            output_path = os.path.join(self.output_dir, f"{symbol}_prices.csv")
+                            df.to_csv(output_path)
+                            print(f"✅ {symbol} 价格数据已保存 ({source}): {len(df)} 行")
+                            return
+                else:
+                    results[source] = {"success": False, "data": None, "rows": 0}
                     
             except Exception as e:
                 print(f"❌ {source} 下载 {symbol} 价格数据失败: {e}")
+                results[source] = {"success": False, "data": None, "rows": 0, "error": str(e)}
                 continue
         
-        print(f"❌ 所有数据源都无法获取 {symbol} 的价格数据")
+        # 测试模式下，显示所有数据源的结果
+        if test_mode:
+            print(f"📊 {symbol} 价格数据测试结果:")
+            for source, result in results.items():
+                status = "✅ 成功" if result["success"] else "❌ 失败"
+                rows = result.get("rows", 0)
+                error = result.get("error", "")
+                print(f"  {source}: {status} ({rows} 行)" + (f" - {error}" if error else ""))
+            
+            # 如果有成功的数据源，保存第一个成功的数据
+            if successful_source:
+                df = results[successful_source]["data"]
+                output_path = os.path.join(self.output_dir, f"{symbol}_prices.csv")
+                df.to_csv(output_path)
+                print(f"💾 保存 {successful_source} 的数据作为最终结果")
+                return results
+        else:
+            if successful_source:
+                print(f"✅ {symbol} 价格数据已保存 ({successful_source}): {results[successful_source]['rows']} 行")
+            else:
+                print(f"❌ 所有数据源都无法获取 {symbol} 的价格数据")
+        
+        return results
     
     async def _download_price_yfinance(self, symbol: str, start_date: str, end_date: str) -> Optional[pd.DataFrame]:
         """使用yfinance下载价格数据"""
@@ -583,9 +637,12 @@ class DataDownloader:
             logger.error(f"Quandl价格数据下载失败: {e}")
             return None
     
-    async def download_market_info_multi_source(self, symbol: str):
+    async def download_market_info_multi_source(self, symbol: str, test_mode: bool = False):
         """多数据源下载市场信息"""
         print(f"多数据源下载 {symbol} 市场信息...")
+        
+        results = {}
+        successful_source = None
         
         for source in self.data_sources["market_info"]:
             try:
@@ -601,18 +658,49 @@ class DataDownloader:
                 elif source == "tiingo" and self.api_keys["tiingo"]:
                     info = await self._download_market_info_tiingo(symbol)
                 
+                # 记录每个数据源的结果
                 if info:
-                    output_path = os.path.join(self.output_dir, f"{symbol}_info.json")
-                    with open(output_path, 'w', encoding='utf-8') as f:
-                        json.dump(info, f, ensure_ascii=False, indent=2)
-                    print(f"✅ {symbol} 市场信息已保存 ({source})")
-                    return
+                    results[source] = {"success": True, "data": info}
+                    if successful_source is None:
+                        successful_source = source
+                        if not test_mode:
+                            # 非测试模式下，找到第一个成功的数据源就保存并返回
+                            output_path = os.path.join(self.output_dir, f"{symbol}_info.json")
+                            with open(output_path, 'w', encoding='utf-8') as f:
+                                json.dump(info, f, ensure_ascii=False, indent=2)
+                            print(f"✅ {symbol} 市场信息已保存 ({source})")
+                            return
+                else:
+                    results[source] = {"success": False, "data": None}
                     
             except Exception as e:
                 print(f"❌ {source} 下载 {symbol} 市场信息失败: {e}")
+                results[source] = {"success": False, "data": None, "error": str(e)}
                 continue
         
-        print(f"❌ 所有数据源都无法获取 {symbol} 的市场信息")
+        # 测试模式下，显示所有数据源的结果
+        if test_mode:
+            print(f"📊 {symbol} 市场信息测试结果:")
+            for source, result in results.items():
+                status = "✅ 成功" if result["success"] else "❌ 失败"
+                error = result.get("error", "")
+                print(f"  {source}: {status}" + (f" - {error}" if error else ""))
+            
+            # 如果有成功的数据源，保存第一个成功的数据
+            if successful_source:
+                info = results[successful_source]["data"]
+                output_path = os.path.join(self.output_dir, f"{symbol}_info.json")
+                with open(output_path, 'w', encoding='utf-8') as f:
+                    json.dump(info, f, ensure_ascii=False, indent=2)
+                print(f"💾 保存 {successful_source} 的数据作为最终结果")
+                return results
+        else:
+            if successful_source:
+                print(f"✅ {symbol} 市场信息已保存 ({successful_source})")
+            else:
+                print(f"❌ 所有数据源都无法获取 {symbol} 的市场信息")
+        
+        return results
     
     async def _download_market_info_yfinance(self, symbol: str) -> Optional[Dict]:
         """使用yfinance下载市场信息"""
@@ -780,9 +868,12 @@ class DataDownloader:
             logger.error(f"Tiingo市场信息下载失败: {e}")
             return None
     
-    async def download_financial_data_multi_source(self, symbol: str):
+    async def download_financial_data_multi_source(self, symbol: str, test_mode: bool = False):
         """多数据源下载财务数据"""
         print(f"多数据源下载 {symbol} 财务数据...")
+        
+        results = {}
+        successful_source = None
         
         for source in self.data_sources["financials"]:
             try:
@@ -796,18 +887,49 @@ class DataDownloader:
                 elif source == "tiingo" and self.api_keys["tiingo"]:
                     data = await self._download_financial_data_tiingo(symbol)
                 
+                # 记录每个数据源的结果
                 if data:
-                    output_path = os.path.join(self.output_dir, f"{symbol}_financials.json")
-                    with open(output_path, 'w', encoding='utf-8') as f:
-                        json.dump(data, f, ensure_ascii=False, indent=2, default=str)
-                    print(f"✅ {symbol} 财务数据已保存 ({source})")
-                    return
+                    results[source] = {"success": True, "data": data}
+                    if successful_source is None:
+                        successful_source = source
+                        if not test_mode:
+                            # 非测试模式下，找到第一个成功的数据源就保存并返回
+                            output_path = os.path.join(self.output_dir, f"{symbol}_financials.json")
+                            with open(output_path, 'w', encoding='utf-8') as f:
+                                json.dump(data, f, ensure_ascii=False, indent=2, default=str)
+                            print(f"✅ {symbol} 财务数据已保存 ({source})")
+                            return
+                else:
+                    results[source] = {"success": False, "data": None}
                     
             except Exception as e:
                 print(f"❌ {source} 下载 {symbol} 财务数据失败: {e}")
+                results[source] = {"success": False, "data": None, "error": str(e)}
                 continue
         
-        print(f"❌ 所有数据源都无法获取 {symbol} 的财务数据")
+        # 测试模式下，显示所有数据源的结果
+        if test_mode:
+            print(f"📊 {symbol} 财务数据测试结果:")
+            for source, result in results.items():
+                status = "✅ 成功" if result["success"] else "❌ 失败"
+                error = result.get("error", "")
+                print(f"  {source}: {status}" + (f" - {error}" if error else ""))
+            
+            # 如果有成功的数据源，保存第一个成功的数据
+            if successful_source:
+                data = results[successful_source]["data"]
+                output_path = os.path.join(self.output_dir, f"{symbol}_financials.json")
+                with open(output_path, 'w', encoding='utf-8') as f:
+                    json.dump(data, f, ensure_ascii=False, indent=2, default=str)
+                print(f"💾 保存 {successful_source} 的数据作为最终结果")
+                return results
+        else:
+            if successful_source:
+                print(f"✅ {symbol} 财务数据已保存 ({successful_source})")
+            else:
+                print(f"❌ 所有数据源都无法获取 {symbol} 的财务数据")
+        
+        return results
     
     async def _download_financial_data_yfinance(self, symbol: str) -> Optional[Dict]:
         """使用yfinance下载财务数据"""
@@ -1015,14 +1137,17 @@ class DataDownloader:
             logger.error(f"Tiingo财务数据下载失败: {e}")
             return None
     
-    async def download_news_data_multi_source(self, symbols: List[str], start_date: str, end_date: str, limit: int = 1000):
+    async def download_news_data_multi_source(self, symbols: List[str], start_date: str, end_date: str, limit: int = 1000, test_mode: bool = False):
         """多数据源下载新闻数据"""
         print(f"多数据源下载新闻数据...")
         
+        results = {}
         all_news = []
+        successful_source = None
         
         for source in self.data_sources["news"]:
             try:
+                news = None
                 if source == "finnhub" and self.api_keys["finnhub"]:
                     news = await self._download_news_finnhub(symbols, start_date, end_date, limit)
                 elif source == "newsapi" and self.api_keys["newsapi"]:
@@ -1030,24 +1155,60 @@ class DataDownloader:
                 elif source == "yfinance":
                     news = await self._download_news_yfinance(symbols, start_date, end_date, limit)
                 
-                if news:
-                    all_news.extend(news)
-                    print(f"✅ 从 {source} 获取到 {len(news)} 条新闻")
-                    break  # 如果成功获取新闻，就不再尝试其他数据源
+                # 记录每个数据源的结果
+                if news and len(news) > 0:
+                    results[source] = {"success": True, "data": news, "count": len(news)}
+                    if successful_source is None:
+                        successful_source = source
+                        if not test_mode:
+                            # 非测试模式下，找到第一个成功的数据源就保存并返回
+                            all_news.extend(news)
+                            unique_news = self._deduplicate_news(all_news)
+                            output_path = os.path.join(self.output_dir, "news_data.json")
+                            with open(output_path, 'w', encoding='utf-8') as f:
+                                json.dump(unique_news, f, ensure_ascii=False, indent=2)
+                            print(f"✅ 从 {source} 获取到 {len(news)} 条新闻，共保存 {len(unique_news)} 条去重后的新闻")
+                            return
+                else:
+                    results[source] = {"success": False, "data": [], "count": 0}
                     
             except Exception as e:
                 print(f"❌ {source} 下载新闻数据失败: {e}")
+                results[source] = {"success": False, "data": [], "count": 0, "error": str(e)}
                 continue
         
-        if all_news:
-            # 去重并保存
-            unique_news = self._deduplicate_news(all_news)
-            output_path = os.path.join(self.output_dir, "news_data.json")
-            with open(output_path, 'w', encoding='utf-8') as f:
-                json.dump(unique_news, f, ensure_ascii=False, indent=2)
-            print(f"✅ 共保存 {len(unique_news)} 条去重后的新闻")
+        # 测试模式下，显示所有数据源的结果
+        if test_mode:
+            print(f"📊 新闻数据测试结果:")
+            for source, result in results.items():
+                status = "✅ 成功" if result["success"] else "❌ 失败"
+                count = result.get("count", 0)
+                error = result.get("error", "")
+                print(f"  {source}: {status} ({count} 条)" + (f" - {error}" if error else ""))
+            
+            # 如果有成功的数据源，保存第一个成功的数据
+            if successful_source:
+                news = results[successful_source]["data"]
+                all_news.extend(news)
+                unique_news = self._deduplicate_news(all_news)
+                output_path = os.path.join(self.output_dir, "news_data.json")
+                with open(output_path, 'w', encoding='utf-8') as f:
+                    json.dump(unique_news, f, ensure_ascii=False, indent=2)
+                print(f"💾 保存 {successful_source} 的数据作为最终结果，共 {len(unique_news)} 条去重后的新闻")
+                return results
         else:
-            print(f"❌ 所有数据源都无法获取新闻数据")
+            if successful_source:
+                news = results[successful_source]["data"]
+                all_news.extend(news)
+                unique_news = self._deduplicate_news(all_news)
+                output_path = os.path.join(self.output_dir, "news_data.json")
+                with open(output_path, 'w', encoding='utf-8') as f:
+                    json.dump(unique_news, f, ensure_ascii=False, indent=2)
+                print(f"✅ 共保存 {len(unique_news)} 条去重后的新闻")
+            else:
+                print(f"❌ 所有数据源都无法获取新闻数据")
+        
+        return results
     
     async def _download_news_finnhub(self, symbols: List[str], start_date: str, end_date: str, limit: int) -> List[Dict]:
         """使用Finnhub下载新闻数据"""
