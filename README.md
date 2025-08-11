@@ -10,6 +10,38 @@
 - 配置文件：`trading_agent_v2/config/config.yaml`
   - 关键项：`symbols_universe`、`news.lookback_days`、`news.page_limit`、`llm.*`
 
+- 环境变量设置示例（Linux/macOS，bash/zsh）：
+  ```bash
+  # 临时设置（当前终端有效）
+  export POLYGON_API_KEY="你的_polygon_key"
+  export OPENAI_API_KEY="你的_openai_key"   # 若使用其他兼容 LLM 服务，也可用 LLM_API_KEY
+  
+  # 验证是否生效
+  echo $POLYGON_API_KEY | sed 's/.\{6\}$/******/'
+  echo $OPENAI_API_KEY | sed 's/.\{6\}$/******/'
+  
+  # 若需长期生效，可追加到 shell 配置文件
+  echo 'export POLYGON_API_KEY="你的_polygon_key"' >> ~/.bashrc
+  echo 'export OPENAI_API_KEY="你的_openai_key"'  >> ~/.bashrc
+  # 或将 OPENAI_API_KEY 改为 LLM_API_KEY：
+  # echo 'export LLM_API_KEY="你的_llm_key"'       >> ~/.bashrc
+  source ~/.bashrc
+  ```
+
+- 在 `config.yaml` 中设置/修改 LLM 的 `base_url`（以及模型名）：
+  ```yaml
+  # 文件：trading_agent_v2/config/config.yaml
+  llm:
+    base_url: "https://api.openai.com/v1"   # 如使用自建/代理服务，请改为你的兼容 OpenAI 接口地址
+    analyzer_model: "gpt-4o-mini"           # 可改为你的可用模型/部署名
+    decision_model: "gpt-4o-mini"           # 可改为你的可用模型/部署名
+    timeout_sec: 60
+    retry:
+      max_retries: 3
+      backoff_factor: 0.5
+  ```
+  - 提示：若你的服务不使用 `OPENAI_API_KEY`，可改用 `LLM_API_KEY` 注入；`llm.base_url` 需指向 OpenAI 兼容的 REST 接口根路径。
+
 ## 二、核心命令
 使用盘中最小闭环：
 
