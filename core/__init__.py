@@ -1,0 +1,1 @@
+# Core package for Trading Agent v2 

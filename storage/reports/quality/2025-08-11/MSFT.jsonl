@@ -1,0 +1,3 @@
+{"duplicates":596,"granularity":"minute","key":"2025-01-02","kind":"duplicate_rows","symbol":"MSFT","ts_utc":"2025-08-11T09:23:15Z"}
+{"duplicates":25,"granularity":"minute","key":"2025-01-03","kind":"duplicate_rows","symbol":"MSFT","ts_utc":"2025-08-11T09:23:15Z"}
+{"key":"2025-01-03","kind":"sparse_minute_bars","num_rows":26,"symbol":"MSFT","ts_utc":"2025-08-11T09:23:15Z"}

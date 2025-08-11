@@ -1,0 +1,1 @@
+# Adapters package for Trading Agent v2 
