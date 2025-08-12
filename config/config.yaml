@@ -5,6 +5,9 @@ bars:
     adjusted: true
     multiplier: 1
     timespan: "minute"
+    # 可选：分钟价源策略（引擎当前默认为 open=vwap/mark=close）
+    open_price_source: "vwap"   # vwap|close
+    mark_price_source: "close"  # close|vwap
   day:
     window_days: 1825
     adjusted: true
@@ -14,6 +17,8 @@ indicators:
 news:
   lookback_days: 7
   page_limit: 100
+  agg: "mean"            # 新增：mean|median|trimmed_mean
+  trim_alpha: 0.1        # 新增：仅在 trimmed_mean 下生效
 triggers:
   abs_ret_1d: 0.02
   top_n_gainers: 30
@@ -26,8 +31,8 @@ risk:
   atr_scale_down: 0.7
   min_holding_days: 2
 execution:
-  price_guard_bps: 10
-  twap_slices: 3
+  price_guard_bps: 10     # 回测引擎当前未用（盘中用）
+  twap_slices: 3          # 回测引擎当前未用，若需启用可在引擎接入
 llm:
   provider: "openai-compatible"
   base_url: "https://api.chatanywhere.tech"
@@ -48,9 +53,20 @@ llm:
     max_prompt_tokens: 200000
     max_completion_tokens: 200000
 backtest:
-  cash: 1000000
+  timespan: "day"         # day | minute，回测粒度默认
+  warmup_days: 60         # 特征构建历史回看窗口
   commission_bps: 1.0
   slippage_bps: 2.0
+  # 细分买卖滑点（可选，优先于 slippage_bps）
+  slippage_buy_bps: 2.0
+  slippage_sell_bps: 2.0
   fill_ratio: 1.0
+  max_positions: 20       # 新增：最大持仓数量（引擎已支持）
+  cooldown_days: 0        # 新增：清仓冷却天数（引擎已支持）
   rebalance_at_open: false
-  timezone: "UTC" 
+  timezone: "UTC"
+
+api:
+  polygon:
+    api_key: "${POLYGON_API_KEY}"     # 可用环境变量注入
+    base_url: "https://api.polygon.io" 

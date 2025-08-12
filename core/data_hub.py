@@ -477,6 +477,131 @@ def get_market_status() -> Dict:
         return {"market": "unknown"}
 
 
+def get_earnings_events(ticker: str, limit: int = 1000) -> List[Dict]:
+    """获取标的的事件日历中“财报相关”的事件（本地过滤）。
+
+    注意：Polygon 的 events 接口对 types 参数的可用值有限（如 ticker_change）。
+    实测传 "earnings" 可能 400。为稳健起见，这里不传 types，
+    本地依据 event["type"] 与字段名包含 "earn" 的子对象进行过滤。
+    """
+    try:
+        items: List[Dict] = _polygon_client.list_ticker_events(ticker, types=None, limit=limit) or []
+    except Exception as exc:  # pragma: no cover
+        logger.exception(f"get_earnings_events failed: {ticker}: {exc}")
+        items = []
+    # 本地过滤 earnings 相关
+    results: List[Dict] = []
+    for it in items:
+        try:
+            t = str(it.get("type") or "").lower()
+            if any(k in t for k in ["earn", "eps"]):
+                results.append(it)
+                continue
+            # 兼容形如 {"earnings_announcement":{...},"type":"earnings_announcement"}
+            keys = " ".join([str(k).lower() for k in it.keys()])
+            if any("earn" in k for k in keys.split()):
+                results.append(it)
+        except Exception:
+            continue
+    return results
+
+
+def is_in_earnings_window(ticker: str, as_of_iso_utc: str, window_days: int = 3) -> bool:
+    """判断 as_of 是否处于财报事件窗（±window_days）。
+    事件窗依据 Polygon events 的 earnings 类型事件（如 earnings_announcement）。
+    """
+    try:
+        now_dt = pd.to_datetime(as_of_iso_utc, utc=True, errors="coerce")
+        if pd.isna(now_dt):
+            now_dt = pd.Timestamp.utcnow().tz_localize("UTC")
+        items = get_earnings_events(ticker, limit=200)
+        for it in items:
+            # 兼容常见字段：start_date、timestamp、event_time
+            ts = it.get("start_date") or it.get("event_time") or it.get("timestamp") or it.get("date")
+            dt = pd.to_datetime(ts, utc=True, errors="coerce")
+            if pd.isna(dt):
+                continue
+            delta = abs((now_dt - dt).days)
+            if delta <= int(window_days):
+                return True
+        return False
+    except Exception as exc:  # pragma: no cover
+        logger.exception(f"is_in_earnings_window failed: {ticker}: {exc}")
+        return False
+
+
+def get_nearest_earnings_event(
+    ticker: str,
+    as_of_iso_utc: str,
+    lookback_days: int = 120,
+    lookahead_days: int = 120,
+) -> Optional[Dict]:
+    """查找距 as_of 最近的“财报相关”事件。
+
+    返回：
+    - {"date": "YYYY-MM-DD", "delta_days": int, "type": str, "raw": dict}
+      若找不到，返回 None。
+    逻辑：
+    1) 读取 events 全量并本地过滤 earnings 相关；选取与 as_of 最近的一条（优先落在 [as_of-回看, as_of+前瞻] 内）。
+    2) 若 events 空，回退：用新闻关键词法近似（取最近一条含 earn/eps 关键词的新闻日期）。
+    """
+    try:
+        as_of = pd.to_datetime(as_of_iso_utc, utc=True, errors="coerce")
+        if pd.isna(as_of):
+            as_of = pd.Timestamp.utcnow().tz_localize("UTC")
+        # 1) events 源
+        items = get_earnings_events(ticker, limit=500) or []
+        candidates: List[Tuple[pd.Timestamp, Dict]] = []
+        for it in items:
+            ts = it.get("start_date") or it.get("event_time") or it.get("timestamp") or it.get("date")
+            dt = pd.to_datetime(ts, utc=True, errors="coerce")
+            if pd.isna(dt):
+                continue
+            candidates.append((dt, it))
+        if candidates:
+            # 先过滤窗口，再就近
+            lb = as_of - pd.Timedelta(days=int(lookback_days))
+            ub = as_of + pd.Timedelta(days=int(lookahead_days))
+            in_win = [(dt, it) for dt, it in candidates if lb <= dt <= ub]
+            pool = in_win if in_win else candidates
+            dt_best, it_best = sorted(pool, key=lambda x: abs((x[0] - as_of).days))[0]
+            return {
+                "date": dt_best.strftime("%Y-%m-%d"),
+                "delta_days": int(abs((dt_best - as_of).days)),
+                "type": str(it_best.get("type") or ""),
+                "raw": it_best,
+            }
+        # 2) 回退：新闻关键词近似
+        # 取 as_of 前后 90 天新闻，找含 earn/eps 关键词的最近一条
+        gte = (as_of - pd.Timedelta(days=90)).strftime("%Y-%m-%d")
+        lte = (as_of + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+        news, _ = get_news(ticker, gte, lte, limit=1000)
+        nearest_dt = None
+        nearest_it: Optional[Dict] = None
+        for it in news or []:
+            title = str(it.get("title") or "").lower()
+            desc = str(it.get("description") or it.get("summary") or it.get("article_body") or "").lower()
+            text = title + " " + desc
+            if ("earn" in text) or ("eps" in text):
+                p = it.get("published_utc") or it.get("published_date")
+                dt = pd.to_datetime(p, utc=True, errors="coerce")
+                if pd.isna(dt):
+                    continue
+                if (nearest_dt is None) or (abs((dt - as_of).days) < abs((nearest_dt - as_of).days)):
+                    nearest_dt = dt
+                    nearest_it = it
+        if nearest_dt is not None and nearest_it is not None:
+            return {
+                "date": nearest_dt.strftime("%Y-%m-%d"),
+                "delta_days": int(abs((nearest_dt - as_of).days)),
+                "type": "news_keyword",
+                "raw": nearest_it,
+            }
+    except Exception as exc:  # pragma: no cover
+        logger.exception(f"get_nearest_earnings_event failed: {ticker}: {exc}")
+    return None
+
+
 def compare_with_legacy_day(symbol: str, start: str, end: str, tolerance: float = 1e-6) -> Dict[str, object]:
     """对齐本地 CSV（legacy）与当前 Parquet（日线）口径，输出差异报告并落盘到 reports/alignments。
     返回简要统计字典。

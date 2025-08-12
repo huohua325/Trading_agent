@@ -90,6 +90,24 @@ class BacktestEngine:
         return filtered
 
     def run(self, strategy, start: str, end: str, symbols: List[str], timespan: str = "day") -> Dict:
+        """
+        回测主循环。
+
+        参数：
+        - strategy: 策略实例，需实现 on_bar(ctx)
+        - start/end: 回测起止日期（YYYY-MM-DD）
+        - symbols: 标的列表
+        - timespan: 撮合时间粒度，"day" 或 "minute"
+          - minute：
+            * 开盘参考价 open_map 取当日首分钟的 vwap（若无 vwap 则使用 close）
+            * 估值价 mark_map 取当日最后一分钟 close
+            * 订单在当日分钟内按 TWAP 均匀切片撮合，并复用滑点与佣金模型；成交比例由 fill_ratio 控制
+          - day：开盘参考价与估值价分别取当日日线 open/close
+
+        说明：
+        - 策略上下文 ctx 将包含 timespan，策略可据此决定是否构建分钟级特征
+        - 需要 datasets.get_min_bars 返回包含 timestamp/vwap/close 列的当日分钟数据
+        """
         dates = pd.date_range(start=start, end=end, freq="B")
         nav = []
         trade_rows = []
@@ -103,6 +121,11 @@ class BacktestEngine:
             # 计算每个 symbol 的当日撮合价与估值价
             open_map: Dict[str, float] = {}
             mark_map: Dict[str, float] = {}
+            # 分钟粒度：
+            # - 开盘价 open_map：当日首分钟 vwap（若无 vwap 则使用 close）
+            # - 估值价 mark_map：当日最后一分钟 close
+            # 日线粒度：
+            # - 开盘价/估值价分别取当日日线 open/close
             if (timespan or "day").lower() == "minute":
                 for s in symbols:
                     mbars = self.datasets.get_min_bars(s, d.strftime("%Y-%m-%d"), d.strftime("%Y-%m-%d"))
@@ -133,7 +156,25 @@ class BacktestEngine:
                     if close_px is not None:
                         mark_map[s] = close_px
 
-            # 策略钩子：提供上下文
+            # 策略钩子：提供上下文（包含 timespan，供策略按分钟/日线构建特征）
+            # 统一参考价：
+            # - day：使用开盘价作为 sizing 的参考（ref_price_map=open_map）
+            # - minute：仍以当日开盘价确定 sizing 基数；风险估值使用当日最后一分钟 close
+            ref_price_map: Dict[str, float] = dict(open_map)
+            def _equity_with(price_map: Dict[str, float]) -> float:
+                # 按给定价标记组合权益
+                return float(pf.cash + sum((pf.positions.get(sym).shares if pf.positions.get(sym) else 0) * price_map.get(sym, pf.positions.get(sym).avg_price if pf.positions.get(sym) else 0.0) for sym in pf.positions.keys()))
+            equity_for_sizing = _equity_with(ref_price_map)
+            # 风险估值优先使用 mark_map；若缺失则回退到 ref_price_map
+            equity_for_risk = _equity_with(mark_map if mark_map else ref_price_map)
+            # 近似的当日回撤（基于开盘权益与当前估值权益）
+            daily_dd_pct = 0.0
+            try:
+                if equity_for_sizing > 0:
+                    intraday_ret = (equity_for_risk - equity_for_sizing) / equity_for_sizing
+                    daily_dd_pct = float(min(0.0, intraday_ret))
+            except Exception:
+                daily_dd_pct = 0.0
             ctx = {
                 "date": d,
                 "symbols": symbols,
@@ -141,6 +182,11 @@ class BacktestEngine:
                 "portfolio": pf,
                 "cfg": self.cfg,
                 "datasets": self.datasets,
+                "timespan": timespan,
+                "ref_price_map": ref_price_map,
+                "equity_for_sizing": equity_for_sizing,
+                "equity_for_risk": equity_for_risk,
+                "daily_drawdown_pct": daily_dd_pct,
             }
             try:
                 orders = strategy.on_bar(ctx) or []

@@ -154,6 +154,33 @@ class PolygonClient:
         next_cursor = data.get("next_url") or data.get("next_page_token") or data.get("next_cursor")
         return items, (next_cursor if next_cursor else None)
 
+    # Ticker events（日历/事件：可筛选 earnings 等）
+    def list_ticker_events(self, ticker: str, types: Optional[str] = None, limit: int = 1000) -> List[Dict]:
+        path = f"/vX/reference/tickers/{ticker}/events"
+        params: Dict[str, object] = {"limit": max(1, min(int(limit), 1000))}
+        if types:
+            params["types"] = types
+        results: List[Dict] = []
+        url = path
+        cursor: Optional[str] = None
+        while True:
+            if cursor:
+                params["cursor"] = cursor
+            data = self._request("GET", url, params)
+            if not data:
+                break
+            items = data.get("results") or []
+            results.extend(items)
+            cursor = data.get("next_url") or data.get("next_page_token") or data.get("next_cursor")
+            if not cursor:
+                break
+            if str(cursor).startswith("http"):
+                url = cursor
+                params = {"apiKey": self.api_key}
+            else:
+                url = path
+        return results
+
     # Corporate actions（分红）
     def list_dividends(self, ticker: str) -> List[Dict]:
         path = "/v3/reference/dividends"

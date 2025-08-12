@@ -586,6 +586,13 @@ def build_features(
     except Exception:
         pass
 
+    # 事件窗：使用 Polygon 事件日历判断是否处于财报窗（±3天）
+    from trading_agent_v2.core import data_hub as _dh
+    try:
+        in_earnings_window = bool(_dh.is_in_earnings_window(symbol, ts_utc, window_days=3))
+    except Exception:
+        in_earnings_window = False
+
     # 仓位状态
     pos = PositionState(**position_state) if isinstance(position_state, dict) and position_state is not None else PositionState()
 
@@ -600,6 +607,8 @@ def build_features(
             "vol_zscore_20d": float(vol_z),
             "realized_vol_20d": float(rv_20),
             "gap_1d": float(gap_1d),
+            "atr_pct": float(atr_pct),
+            "in_earnings_window": bool(in_earnings_window),
         },
         position_state=pos,
     )
