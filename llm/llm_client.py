@@ -52,6 +52,11 @@ class LLMClient:
             return None
         st = os.stat(path)
         if (time.time() - st.st_mtime) > ttl_hours * 3600:
+            # TTL 过期：删除旧缓存文件
+            try:
+                os.remove(path)
+            except Exception:
+                pass
             return None
         try:
             with open(path, "r", encoding="utf-8") as f:

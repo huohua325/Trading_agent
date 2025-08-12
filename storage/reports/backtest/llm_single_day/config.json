@@ -9,7 +9,9 @@
       "window_days": 30,
       "adjusted": true,
       "multiplier": 1,
-      "timespan": "minute"
+      "timespan": "minute",
+      "open_price_source": "vwap",
+      "mark_price_source": "close"
     },
     "day": {
       "window_days": 1825,
@@ -72,12 +74,23 @@
     "backtest_cache_only": false
   },
   "backtest": {
-    "cash": 1000000,
+    "timespan": "day",
+    "warmup_days": 60,
     "commission_bps": 2.0,
     "slippage_bps": 10.0,
+    "slippage_buy_bps": 2.0,
+    "slippage_sell_bps": 2.0,
     "fill_ratio": 0.8,
+    "max_positions": 20,
+    "cooldown_days": 0,
     "rebalance_at_open": false,
     "timezone": "UTC",
-    "timespan": "day"
+    "summary_llm": false
+  },
+  "api": {
+    "polygon": {
+      "api_key": "${POLYGON_API_KEY}",
+      "base_url": "https://api.polygon.io"
+    }
   }
 }

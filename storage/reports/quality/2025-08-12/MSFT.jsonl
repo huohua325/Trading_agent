@@ -1,0 +1,6 @@
+{"duplicates":578,"granularity":"minute","key":"2025-01-14","kind":"duplicate_rows","symbol":"MSFT","ts_utc":"2025-08-12T15:48:08Z"}
+{"duplicates":15,"granularity":"minute","key":"2025-01-15","kind":"duplicate_rows","symbol":"MSFT","ts_utc":"2025-08-12T15:48:08Z"}
+{"key":"2025-01-15","kind":"sparse_minute_bars","num_rows":16,"symbol":"MSFT","ts_utc":"2025-08-12T15:48:08Z"}
+{"duplicates":606,"granularity":"minute","key":"2025-01-16","kind":"duplicate_rows","symbol":"MSFT","ts_utc":"2025-08-12T15:48:12Z"}
+{"duplicates":10,"granularity":"minute","key":"2025-01-17","kind":"duplicate_rows","symbol":"MSFT","ts_utc":"2025-08-12T15:48:12Z"}
+{"key":"2025-01-17","kind":"sparse_minute_bars","num_rows":11,"symbol":"MSFT","ts_utc":"2025-08-12T15:48:12Z"}

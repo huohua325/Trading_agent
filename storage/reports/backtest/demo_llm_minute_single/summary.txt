@@ -1,0 +1,5 @@
+run_id: demo_llm_minute_single
+period: NA ~ NA
+params: commission_bps=2.0, slippage_bps=10.0, fill_ratio=0.8, news_agg=mean, trim_alpha=0.1, strategy=N/A, timespan=minute, agent_mode=single
+metrics: cum_return=0.0000, max_drawdown=0.0000, volatility=0.0000, sharpe=0.0000
+trades: 0 rows

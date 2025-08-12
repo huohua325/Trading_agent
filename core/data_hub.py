@@ -192,11 +192,21 @@ def _load_cached_news(ticker: str) -> Optional[List[Dict]]:
     st = os.stat(path)
     # 24h 以内有效
     if (datetime.now().timestamp() - st.st_mtime) > 24 * 3600:
+        # 过期即删除
+        try:
+            os.remove(path)
+        except Exception:
+            pass
         return None
     try:
         with open(path, "r", encoding="utf-8") as f:
             return json.load(f)
     except Exception:
+        # 损坏或读取失败：删除以释放空间
+        try:
+            os.remove(path)
+        except Exception:
+            pass
         return None
 
 
@@ -647,7 +657,7 @@ def compare_with_legacy_day(symbol: str, start: str, end: str, tolerance: float 
         return report
     except Exception as exc:  # pragma: no cover
         logger.warning(f"compare_with_legacy_day failed for {symbol}: {exc}")
-        return {"symbol": symbol, "error": str(exc)} 
+        return {"symbol": symbol, "error": str(exc)}
 
 
 def get_financials(ticker: str, timeframe: Optional[str] = None, limit: int = 50, use_cache: bool = True) -> List[Dict]:
@@ -668,6 +678,16 @@ def get_financials(ticker: str, timeframe: Optional[str] = None, limit: int = 50
                         if isinstance(data, list):
                             return data[:limit]
                 except Exception:
+                    # 损坏：删除后视为未命中
+                    try:
+                        os.remove(cache_path)
+                    except Exception:
+                        pass
+            else:
+                # 过期：删除后视为未命中
+                try:
+                    os.remove(cache_path)
+                except Exception:
                     pass
         items = _polygon_client.list_financials(ticker, timeframe=timeframe, limit=limit)
         # 简单去重（按报告期+文件类型或 id）
@@ -687,4 +707,4 @@ def get_financials(ticker: str, timeframe: Optional[str] = None, limit: int = 50
         return deduped[:limit]
     except Exception as exc:  # pragma: no cover
         logger.warning(f"get_financials failed: {ticker}: {exc}")
-        return [] 
+        return []

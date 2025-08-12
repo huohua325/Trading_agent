@@ -20,6 +20,7 @@ import pandas as pd
 from trading_agent_v2.core.features import build_features
 from trading_agent_v2.agents.analyzer_llm import analyze_batch
 from trading_agent_v2.agents.decision_llm import decide_batch
+from trading_agent_v2.agents.single_agent_llm import decide_batch as single_agent_decide_batch
 from trading_agent_v2.core import data_hub
 
 
@@ -38,6 +39,7 @@ class Strategy:
     - news_lookback_days: 新闻回看窗口天数，用于特征构建
     - page_limit: 新闻条目抓取上限
     - warmup_days: 特征构建所需的历史回看天数（例如均线、财务等）
+    - agent_mode: 代理模式，"multi"(多体) 或 "single"(单体)
     """
     def __init__(self, cfg: Dict, replay: bool = False, audit_dir: str | None = None) -> None:
         """初始化策略。
@@ -55,6 +57,8 @@ class Strategy:
         self.news_lookback_days = int((cfg or {}).get("news", {}).get("lookback_days", 7))
         self.page_limit = int((cfg or {}).get("news", {}).get("page_limit", 50))
         self.warmup_days = int((cfg or {}).get("backtest", {}).get("warmup_days", 60))
+        # 代理模式："multi"(多体) 或 "single"(单体)，默认多体
+        self.agent_mode = str((cfg or {}).get("agents", {}).get("mode", "multi")).lower()
 
     def _load_all_orders(self) -> List[Dict]:
         """加载审计目录中所有订单记录（仅在回放模式下使用）。
@@ -211,25 +215,35 @@ class Strategy:
         open_map = ctx["open_map"]
         if not open_map:
             return []
-        # 1) 特征构建 -> 2) 分析 LLM -> 3) 决策 LLM -> 4) 生成订单
+        
+        # 1) 特征构建
         features_list = self._build_features_for_day(ctx)
-        analysis_map = analyze_batch(features_list, cfg=self.cfg, enable_llm=True, cache_only=self.llm_cache_only)
-        decisions_input = []
-        for fi in features_list:
-            symbol = fi["symbol"]
-            # 使用统一风控：基于分析输出/仓位/风险配置/市场上下文（含 atr_pct/daily_drawdown_pct）
-            try:
-                from trading_agent_v2.core.risk_guard import make_limits
-                limits = make_limits(
-                    analysis=analysis_map.get(symbol, {}),
-                    position_state=fi.get("position_state", {}),
-                    risk_cfg=self.cfg.get("risk", {}),
-                    market_ctx={**(fi.get("market_ctx", {}) or {}), "atr_pct": (fi.get("tech", {}) or {}).get("atr_pct", fi.get("market_ctx", {}).get("atr_pct", 0.0))},
-                )
-            except Exception:
-                limits = {"allowed": ["increase", "hold", "decrease", "close"], "max_pos_pct": float(self.cfg.get("risk", {}).get("max_pos_pct", 0.1))}
-            decisions_input.append({"features": fi, "analysis": analysis_map.get(symbol, {}), "limits": limits})
-        decisions_map = decide_batch(decisions_input, cfg=self.cfg, enable_llm=True, cache_only=self.llm_cache_only)
+        
+        # 2) 根据代理模式选择不同的处理路径
+        if self.agent_mode == "single":
+            # 单体模式：直接调用单体代理
+            decisions_map = single_agent_decide_batch(features_list, cfg=self.cfg, enable_llm=True, cache_only=self.llm_cache_only)
+        else:
+            # 多体模式（默认）：先分析再决策
+            analysis_map = analyze_batch(features_list, cfg=self.cfg, enable_llm=True, cache_only=self.llm_cache_only)
+            decisions_input = []
+            for fi in features_list:
+                symbol = fi["symbol"]
+                # 使用统一风控：基于分析输出/仓位/风险配置/市场上下文（含 atr_pct/daily_drawdown_pct）
+                try:
+                    from trading_agent_v2.core.risk_guard import make_limits
+                    limits = make_limits(
+                        analysis=analysis_map.get(symbol, {}),
+                        position_state=fi.get("position_state", {}),
+                        risk_cfg=self.cfg.get("risk", {}),
+                        market_ctx={**(fi.get("market_ctx", {}) or {}), "atr_pct": (fi.get("tech", {}) or {}).get("atr_pct", fi.get("market_ctx", {}).get("atr_pct", 0.0))},
+                    )
+                except Exception:
+                    limits = {"allowed": ["increase", "hold", "decrease", "close"], "max_pos_pct": float(self.cfg.get("risk", {}).get("max_pos_pct", 0.1))}
+                decisions_input.append({"features": fi, "analysis": analysis_map.get(symbol, {}), "limits": limits})
+            decisions_map = decide_batch(decisions_input, cfg=self.cfg, enable_llm=True, cache_only=self.llm_cache_only)
+        
+        # 3) 生成订单
         orders: List[Dict] = []
         pf = ctx["portfolio"]
         ref_price_map = ctx.get("ref_price_map", {}) or {}

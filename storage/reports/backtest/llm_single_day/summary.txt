@@ -1,5 +1,5 @@
 run_id: llm_single_day
-period: 2025-03-03 00:00:00 ~ 2025-03-07 00:00:00
+period: 2025-05-01 00:00:00 ~ 2025-05-29 00:00:00
 params: commission_bps=2.0, slippage_bps=10.0, fill_ratio=0.8, news_agg=trimmed_mean, trim_alpha=0.1, strategy=N/A, timespan=day
-metrics: cum_return=-0.0121, max_drawdown=-0.0176, volatility=0.1061, sharpe=-4.7639
-trades: 7 rows
+metrics: cum_return=0.0274, max_drawdown=-0.0225, volatility=0.1001, sharpe=3.1404
+trades: 16 rows

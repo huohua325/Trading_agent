@@ -17,9 +17,23 @@ def _default_run_id() -> str:
     return datetime.now().strftime("%Y%m%d_%H%M%S")
 
 
+def _unique_run_dir(root: str, run_id: str) -> tuple[str, str]:
+    """返回唯一的输出目录与最终 run_id。
+    若 `root/run_id` 已存在，则追加时间戳后缀 `_%Y%m%d_%H%M%S_%f` 以避免覆盖。
+    """
+    base = os.path.join(root, run_id)
+    if not os.path.exists(base):
+        return base, run_id
+    # 目录已存在：追加高精度时间戳，确保本次运行独立
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    rid = f"{run_id}_{ts}"
+    return os.path.join(root, rid), rid
+
+
 def write_outputs(result: Dict, run_id: str | None = None, cfg: Dict[str, Any] | None = None) -> str:
     run_id = run_id or _default_run_id()
-    base = os.path.join(os.getcwd(), "trading_agent_v2", "storage", "reports", "backtest", run_id)
+    root = os.path.join(os.getcwd(), "trading_agent_v2", "storage", "reports", "backtest")
+    base, run_id = _unique_run_dir(root, run_id)
     _ensure_dir(base)
 
     # trades
@@ -87,10 +101,11 @@ def write_outputs(result: Dict, run_id: str | None = None, cfg: Dict[str, Any] |
         news_cfg = (cfg or {}).get("news", {}) if isinstance(cfg, dict) else {}
         strat = (cfg or {}).get("strategy", "") if isinstance(cfg, dict) else ""
         timespan = (cfg or {}).get("backtest", {}).get("timespan") if isinstance(cfg, dict) else None
+        agent_mode = (cfg or {}).get("agents", {}).get("mode") if isinstance(cfg, dict) else None
         summary_lines.append(
             "params: "
             f"commission_bps={bt.get('commission_bps')}, slippage_bps={bt.get('slippage_bps')}, fill_ratio={bt.get('fill_ratio')}, "
-            f"news_agg={news_cfg.get('agg')}, trim_alpha={news_cfg.get('trim_alpha')}, strategy={strat or 'N/A'}, timespan={timespan or 'N/A'}"
+            f"news_agg={news_cfg.get('agg')}, trim_alpha={news_cfg.get('trim_alpha')}, strategy={strat or 'N/A'}, timespan={timespan or 'N/A'}, agent_mode={agent_mode or 'N/A'}"
         )
     except Exception:
         pass

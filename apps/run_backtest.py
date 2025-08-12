@@ -32,6 +32,8 @@ def main(
     cooldown_days: int = typer.Option(None, help="清仓后冷却天数（为空则使用配置）"),
     min_holding_days: int = typer.Option(None, help="最小持有天数（为空则使用配置）"),
     llm_cache_only: bool = typer.Option(None, help="回测中 LLM 调用是否仅用缓存（为空则使用配置）"),
+    # 新增：代理模式选择
+    agent_mode: str = typer.Option(None, help="代理模式：multi|single（为空则使用配置）"),
     # 执行与成本
     timespan: str = typer.Option("day", help="撮合时间粒度：day|minute（minute 为预留/近似）"),
     cost_tier: str = typer.Option(None, help="成本与执行假设分层：low|med|high（为空则使用配置）"),
@@ -42,6 +44,7 @@ def main(
     sweep_news_agg: str = typer.Option("", help="敏感性扫描：news_agg 候选，逗号分隔，如 mean,median,trimmed_mean"),
     sweep_news_trim_alpha: str = typer.Option("", help="敏感性扫描：trim_alpha 候选，逗号分隔，如 0.0,0.1,0.2"),
     sweep_cost_tier: str = typer.Option("", help="敏感性扫描：cost_tier 候选，逗号分隔，如 low,med,high"),
+    sweep_agent_mode: str = typer.Option("", help="敏感性扫描：agent_mode 候选，逗号分隔，如 multi,single"),
     # 回测总结（自然语言）
     summary_llm: bool = typer.Option(False, help="回测结束后是否调用真实 LLM 生成自然语言总结（默认否；关闭时本地生成简要文本）"),
 ):
@@ -68,6 +71,9 @@ def main(
         config.setdefault("risk", {})["min_holding_days"] = int(min_holding_days)
     if llm_cache_only is not None:
         config.setdefault("llm", {})["backtest_cache_only"] = bool(llm_cache_only)
+    # 新增：代理模式覆盖
+    if agent_mode is not None:
+        config.setdefault("agents", {})["mode"] = str(agent_mode)
     # 回测总结：是否启用真实 LLM
     config.setdefault("backtest", {})["summary_llm"] = bool(summary_llm)
 
@@ -98,6 +104,8 @@ def main(
     agg_list = [a for a in (sweep_news_agg.split(",") if sweep_news_agg else []) if a]
     trim_list_raw = [t for t in (sweep_news_trim_alpha.split(",") if sweep_news_trim_alpha else []) if t]
     cost_list = [c for c in (sweep_cost_tier.split(",") if sweep_cost_tier else []) if c]
+    # 新增：代理模式扫描
+    agent_list = [a for a in (sweep_agent_mode.split(",") if sweep_agent_mode else []) if a]
     # 若未提供扫描项，则使用当前配置值单元素
     if not agg_list:
         agg_list = [config.get("news", {}).get("agg", "mean")]
@@ -105,6 +113,8 @@ def main(
         trim_list_raw = [str(config.get("news", {}).get("trim_alpha", 0.1))]
     if not cost_list:
         cost_list = [tier or (config.get("backtest", {}).get("cost_tier") or "")]  # 可能为空串
+    if not agent_list:
+        agent_list = [config.get("agents", {}).get("mode", "multi")]
 
     # 规范化 trim_alpha 列表为 float
     trim_list: List[float] = []
@@ -117,12 +127,14 @@ def main(
         trim_list = [0.1]
 
     # 运行一个或多个组合
-    any_multi = (len(agg_list) > 1) or (len(trim_list) > 1) or (len(cost_list) > 1)
+    any_multi = (len(agg_list) > 1) or (len(trim_list) > 1) or (len(cost_list) > 1) or (len(agent_list) > 1)
     results = []
-    for agg_val, trim_val, tier_val in itertools.product(agg_list, trim_list, cost_list):
+    for agg_val, trim_val, tier_val, agent_val in itertools.product(agg_list, trim_list, cost_list, agent_list):
         cfg_i = copy.deepcopy(config)
         cfg_i.setdefault("news", {})["agg"] = agg_val
         cfg_i.setdefault("news", {})["trim_alpha"] = float(trim_val)
+        # 新增：设置代理模式
+        cfg_i.setdefault("agents", {})["mode"] = agent_val
         # 按 cost_tier 覆盖三项
         tv = (tier_val or "").lower()
         if tv in {"low", "med", "high"}:
@@ -143,7 +155,7 @@ def main(
         rid = run_id
         if any_multi:
             base = run_id or "auto"
-            suffix = f"agg={agg_val}|alpha={trim_val}|tier={tv or 'cfg'}"
+            suffix = f"agg={agg_val}|alpha={trim_val}|tier={tv or 'cfg'}|agent={agent_val}"
             rid = f"{base}_{suffix}"
 
         if strategy == "llm_decision":
@@ -153,11 +165,11 @@ def main(
 
         result = run_backtest(cfg=cfg_i, strategy=strat, start=start, end=end, symbols=sym_list, replay=replay, run_id=rid, timespan=timespan)
         metrics = result["metrics"]
-        typer.echo(f"回测完成：{start}~{end} 标的数={len(sym_list)} replay={replay} news_agg={agg_val} trim_alpha={trim_val} cost_tier={tv or tier}")
+        typer.echo(f"回测完成：{start}~{end} 标的数={len(sym_list)} replay={replay} news_agg={agg_val} trim_alpha={trim_val} cost_tier={tv or tier} agent_mode={agent_val}")
         typer.echo(f"参数：max_positions={cfg_i.get('risk',{}).get('max_positions')}, cooldown_days={cfg_i.get('risk',{}).get('cooldown_days')}, min_holding_days={cfg_i.get('risk',{}).get('min_holding_days')}, llm_cache_only={cfg_i.get('llm',{}).get('backtest_cache_only')}, timespan={timespan}")
         typer.echo(f"指标：cum_return={metrics['cum_return']:.4f}, max_dd={metrics['max_drawdown']:.4f}, sharpe={metrics['sharpe']:.4f}")
         typer.echo(f"输出目录：{result.get('output_dir')}")
-        results.append({"agg": agg_val, "alpha": float(trim_val), "tier": tv, "metrics": metrics, "output_dir": result.get("output_dir")})
+        results.append({"agg": agg_val, "alpha": float(trim_val), "tier": tv, "agent": agent_val, "metrics": metrics, "output_dir": result.get("output_dir")})
 
         m.gauge("bt.cum_return", float(metrics.get("cum_return", 0)))
         m.gauge("bt.max_drawdown", float(metrics.get("max_drawdown", 0)))

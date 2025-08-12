@@ -33,11 +33,16 @@ risk:
 execution:
   price_guard_bps: 10     # 回测引擎当前未用（盘中用）
   twap_slices: 3          # 回测引擎当前未用，若需启用可在引擎接入
+# 新增：代理配置
+agents:
+  mode: "multi"           # multi|single，默认多体模式
+  prompt_version: "single_agent/v1"  # 单体模式下使用的提示词版本
 llm:
   provider: "openai-compatible"
   base_url: "https://api.chatanywhere.tech"
   analyzer_model: "gpt-4o-mini"
   decision_model: "gpt-4o-mini"
+  single_agent_model: "gpt-4o-mini"  # 新增：单体模式使用的模型
   temperature: 0.0
   max_tokens: 256
   batch_size: 16
@@ -52,6 +57,7 @@ llm:
   budget:
     max_prompt_tokens: 200000
     max_completion_tokens: 200000
+  backtest_cache_only: true  # 新增：回测时是否仅使用缓存
 backtest:
   timespan: "day"         # day | minute，回测粒度默认
   warmup_days: 60         # 特征构建历史回看窗口
