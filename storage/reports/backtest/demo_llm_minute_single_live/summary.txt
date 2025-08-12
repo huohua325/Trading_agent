@@ -1,5 +1,0 @@
-run_id: demo_llm_minute_single_live
-period: 2025-01-14 09:00:00 ~ 2025-01-14 17:59:00
-params: commission_bps=2.0, slippage_bps=10.0, fill_ratio=0.8, news_agg=mean, trim_alpha=0.1, strategy=N/A, timespan=minute, agent_mode=single
-metrics: cum_return=-0.0023, max_drawdown=-0.0023, volatility=0.0206, sharpe=-9.1652
-trades: 424 rows

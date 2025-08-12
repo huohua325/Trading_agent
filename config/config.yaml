@@ -19,6 +19,11 @@ news:
   page_limit: 100
   agg: "mean"            # 新增：mean|median|trimmed_mean
   trim_alpha: 0.1        # 新增：仅在 trimmed_mean 下生效
+  llm_sentiment: false   # 是否启用逐条新闻 LLM 打分（单体/多体均可用）
+  include_text: true     # 新增：是否将新闻文本（标题/摘要）压缩后直接传入单体（无需额外 LLM）
+  text_mode: "titles"    # 新增：titles|titles_summaries
+  text_max_items: 5      # 新增：选取的新闻条目上限
+  text_max_chars: 800    # 新增：拼接后字符串的最大字符数（超出将截断）
 triggers:
   abs_ret_1d: 0.02
   top_n_gainers: 30

@@ -33,7 +33,7 @@ class Strategy:
     属性说明：
     - cfg: 策略与回测相关的配置字典
     - replay: 是否启用回放模式（使用审计订单而非实时 LLM 决策）
-    - audit_dir: 回放模式下存放审计 `*.jsonl` 的目录路径
+    - audit_dir: 回放模式下的审计目录（包含 *.jsonl 文件）
     - _cache: 缓存已加载的审计订单，避免重复 IO
     - llm_cache_only: 是否仅使用缓存生成 LLM 结果（避免真实调用）
     - news_lookback_days: 新闻回看窗口天数，用于特征构建
@@ -59,6 +59,8 @@ class Strategy:
         self.warmup_days = int((cfg or {}).get("backtest", {}).get("warmup_days", 60))
         # 代理模式："multi"(多体) 或 "single"(单体)，默认多体
         self.agent_mode = str((cfg or {}).get("agents", {}).get("mode", "multi")).lower()
+        # 是否启用逐条新闻 LLM 打分
+        self.enable_news_llm_sent = bool((cfg or {}).get("news", {}).get("llm_sentiment", False))
 
     def _load_all_orders(self) -> List[Dict]:
         """加载审计目录中所有订单记录（仅在回放模式下使用）。
@@ -140,6 +142,12 @@ class Strategy:
                 # 注意：此处按当日取分钟K（end~end）；build_features 将基于分钟末推导 ts_utc 与价格
                 bars_min = ctx["datasets"].get_min_bars(s, end, end)
             news_items, _ = data_hub.get_news(s, gte_news, end, limit=self.page_limit)
+            # 可选：逐条 LLM 打分补充 sentiment
+            if self.enable_news_llm_sent:
+                try:
+                    news_items = data_hub.enrich_news_with_llm_sentiment(news_items, cfg=self.cfg, cache_only=self.llm_cache_only)
+                except Exception:
+                    pass
             dividends = data_hub.get_dividends(s)
             splits = data_hub.get_splits(s)
             financials = data_hub.get_financials(s, timeframe=None, limit=100)
@@ -152,6 +160,34 @@ class Strategy:
             else:
                 snapshot = {"symbol": s, "price": float(ref_px) if ref_px is not None else None, "ts_utc": f"{end}T00:00:00Z"}
             details = {"ticker": s, "news_agg": cfg.get("news", {}).get("agg", "mean"), "news_trim_alpha": cfg.get("news", {}).get("trim_alpha", 0.1)}
+            # 若开启文本直传：拼接标题/摘要供单体使用
+            try:
+                nw = cfg.get("news", {}) or {}
+                if bool(nw.get("include_text", False)) and isinstance(news_items, list) and news_items:
+                    mode = str(nw.get("text_mode", "titles")).lower()
+                    max_items = int(nw.get("text_max_items", 5))
+                    max_chars = int(nw.get("text_max_chars", 800))
+                    picked = news_items[:max(1, max_items)]
+                    parts = []
+                    for it in picked:
+                        title = (it.get("title") or "").strip()
+                        if not title:
+                            continue
+                        if mode == "titles_summaries":
+                            summary = (it.get("description") or it.get("summary") or "").strip()
+                            if summary:
+                                parts.append(f"{title} | {summary}")
+                            else:
+                                parts.append(title)
+                        else:
+                            parts.append(title)
+                    text = " \n".join(parts)
+                    if len(text) > max_chars:
+                        text = text[:max_chars]
+                    if text:
+                        details["news_text"] = text
+            except Exception:
+                pass
             # 组合状态（当前头寸与仓位占比）
             position = ctx["portfolio"].positions.get(s)
             equity_for_risk = float(ctx.get("equity_for_risk") or 0.0)
