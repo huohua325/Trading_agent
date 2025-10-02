@@ -145,7 +145,6 @@ This project is licensed under the Apache 2.0 License - see the [LICENSE](LICENS
 ## 📧 Contact
 
 - 🐛 Issues: [GitHub Issues](../../issues)
-- 💬 Discussions: [GitHub Discussions](../../discussions)
 
 ---
 
