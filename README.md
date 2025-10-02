@@ -45,12 +45,6 @@ StockBench provides rich financial data features:
 
 ## 🚀 Quick Start
 
-### Prerequisites
-
-- Python 3.10 or higher
-- 8GB+ RAM recommended
-- Internet connection (for market data)
-
 ### Installation
 
 ```bash
