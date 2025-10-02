@@ -36,25 +36,13 @@
 - **Zero Prior Exposure**: Ensures LLMs have no access to test data during training phase
 - **Contemporary Evaluation**: Uses up-to-date market scenarios unseen by current LLM training corpora
 
-#### 📊 Comprehensive Evaluation
-- **Multi-Dimensional Metrics**: Returns, Sharpe ratio, maximum drawdown, win rate, and more
-- **Visual Reports**: Automated generation of detailed backtest reports and performance comparison charts
-- **Multi-Model Support**: Compatible with OpenAI GPT, DeepSeek, Kimi, Qwen, and other mainstream LLMs
-- **Flexible Configuration**: Support for custom trading strategies, risk parameters, and backtest periods
-
-### 📊 Dataset
+### 📊 Investment Targets
 
 <div align="center">
 <img src="dataset.png" alt="StockBench Dataset" width="800"/>
 <p><i>StockBench Dataset Structure and Features</i></p>
 </div>
-
-StockBench provides rich financial data features:
-- **Price Data**: Open, High, Low, Close, Volume (OHLCV)
-- **Technical Indicators**: Moving Averages, RSI, MACD, and more
-- **Fundamental Data**: Financial statements and valuation metrics
-- **Market Sentiment**: News events and social media sentiment analysis
-
+We select the top 20 stocks from the Dow Jones Industrial Average (DJIA) by weight as our investment targets, ensuring diverse representation across major sectors while avoiding short-term irrational market sentiment.
 ---
 
 ## 🚀 Quick Start
