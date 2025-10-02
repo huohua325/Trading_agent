@@ -18,24 +18,10 @@
 
 ### ✨ Key Features
 
-**STOCKBENCH** is designed following three core principles to ensure reliable and realistic evaluation of LLMs in trading scenarios:
-
-#### 🌍 Realistic Market Interaction
-- **Curated Investment Targets**: Carefully selected bundle of stocks representing diverse market sectors
-- **Reliable Data Sources**: Integration with Polygon and Finnhub for high-quality historical price, fundamental data, and news
-- **Timely News Corpus**: Concise yet comprehensive news events that mirror real-world information complexity
-
-#### 🔄 Continuous Decision Making
-- **Portfolio-Level Analysis**: Agent first performs comprehensive portfolio overview
-- **In-Depth Stock Evaluation**: Detailed analysis of individual stocks with technical and fundamental indicators
-- **Daily Trading Decisions**: Generates actionable buy/sell/hold decisions that reflect retail investor workflows
-- **Adaptive Strategies**: Enables agents to adjust strategies dynamically in response to evolving market conditions
-
-#### 🔒 Data Contamination Free
-- **Temporal Separation**: Benchmark instantiated with recent market data (post-2024) to avoid training data overlap
-- **Zero Prior Exposure**: Ensures LLMs have no access to test data during training phase
-- **Contemporary Evaluation**: Uses up-to-date market scenarios unseen by current LLM training corpora
-
+- 🌍 **Realistic Market Interaction** - Curated stocks with high-quality price, fundamental data, and timely news from Polygon & Finnhub
+- 🔄 **Continuous Decision Making** - Multi-step workflow (portfolio → analysis → trade) reflecting real investor behavior
+- 🔒 **Data Contamination Free** - Recent market data (post-2024) with zero overlap with LLM training corpora
+- 📊 **Comprehensive Evaluation** - Rich metrics and visual reports for multiple LLM models
 ### 📊 Investment Targets
 
 <div align="center">
