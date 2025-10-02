@@ -4,7 +4,7 @@
 <p align="center">
   <a href="https://stockbench.github.io/">Website</a> •
   <a href="">Paper</a> •
-  <a href="https://github.com/ChenYXxxx/stockbench">Doc</a> •
+  <a href="https://github.com/ChenYXxxx/stockbench">Github</a> 
 </p>
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
