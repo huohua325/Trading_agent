@@ -21,7 +21,6 @@
 - 🌍 **Realistic Market Interaction** - Curated stocks with high-quality price, fundamental data, and timely news from Polygon & Finnhub
 - 🔄 **Continuous Decision Making** - Multi-step workflow (portfolio → analysis → trade) reflecting real investor behavior
 - 🔒 **Data Contamination Free** - Recent market data (post-2024) with zero overlap with LLM training corpora
-- 📊 **Comprehensive Evaluation** - Rich metrics and visual reports for multiple LLM models
 ### 📊 Investment Targets
 
 <div align="center">
