@@ -74,7 +74,7 @@ agents:
 llm_profiles:
   openai:
     provider: "openai"
-    base_url: "https://oss-120b.app.msh.team/v1"
+    base_url: ""
     model: "oss-120b"
     backtest_report_model: "oss-120b"
     auth_required: true
@@ -85,7 +85,7 @@ llm_profiles:
 
   deepseek-v3.1:
     provider: "openai"
-    base_url: "https://api.chatanywhere.tech/v1"
+    base_url: ""
     model: "deepseek-v3.1-250821"
     backtest_report_model: "deepseek-v3.1-250821"
     auth_required: true
@@ -96,7 +96,7 @@ llm_profiles:
 
   kimi-k2-0711-preview:
     provider: "openai"
-    base_url: "https://openai.app.msh.team/v1"
+    base_url: ""
     model: "kimi-k2-0711-preview"
     backtest_report_model: "kimi-k2-0711-preview"
     auth_required: true
