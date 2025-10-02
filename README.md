@@ -62,7 +62,7 @@ pip install -r requirements.txt
 
 ### Configuration
 
-Set up your API keys:
+Set up your API keys:（If you need to test other months or stocks, please set it up）
 
 ```bash
 export POLYGON_API_KEY="your_polygon_api_key"
@@ -104,16 +104,9 @@ bash scripts/run_benchmark.sh \
 Backtest results are automatically saved in `storage/reports/backtest/` with comprehensive metrics:
 
 **Performance Metrics**
-- Total Return & Annualized Return
-- Sharpe Ratio & Sortino Ratio
+- Total Return
+- Sortino Ratio
 - Maximum Drawdown
-- Win Rate & Trade Statistics
-
-**Visualization**
-- Equity curves vs. benchmarks
-- Excess return analysis
-- Per-symbol performance heatmaps
-- Drawdown comparison charts
 
 ---
 
@@ -133,10 +126,6 @@ python -m stockbench.apps.pre_cache \
 
 Extend the platform with your own trading strategies by implementing custom agents.
 
-### Batch Testing
-
-Compare multiple LLM models in parallel to find the best performer for your use case.
-
 ---
 
 ## 📚 Project Structure
@@ -155,17 +144,6 @@ stockbench/
 
 ---
 
-## 🤝 Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
-
-1. Fork the repository
-2. Create your feature branch
-3. Commit your changes
-4. Push to the branch
-5. Open a Pull Request
-
----
 
 ## 📄 License
 
