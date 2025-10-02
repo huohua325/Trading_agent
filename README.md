@@ -53,7 +53,7 @@ git clone <repository-url>
 cd stockbench
 
 # Create environment
-conda create -n stockbench python=3.13
+conda create -n stockbench python=3.11
 conda activate stockbench
 
 # Install dependencies
