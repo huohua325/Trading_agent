@@ -1,6 +1,6 @@
 <div align="center">
 
-#An LLM-Powered Stock Trading Benchmark Platform
+# An LLM-Powered Stock Trading Benchmark Platform
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/)
