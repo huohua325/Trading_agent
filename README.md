@@ -6,6 +6,7 @@
   <a href="">Paper</a> •
   <a href="https://github.com/ChenYXxxx/stockbench">Doc</a> •
 </p>
+
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/)
 [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
