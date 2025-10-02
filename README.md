@@ -102,17 +102,7 @@ Backtest results are automatically saved in `storage/reports/backtest/` with com
 
 ---
 
-## 🛠️ Advanced Features
 
-### Offline Mode
-
-Pre-cache data for offline backtesting:
-
-```bash
-python -m stockbench.apps.pre_cache \
-    --start-date 2025-03-01 \
-    --end-date 2025-06-30
-```
 
 ### Custom Strategies
 
