@@ -58,12 +58,12 @@ agents:
   # Dual-agent architecture (effective when mode is 'dual')
   dual_agent:
     fundamental_filter:
-      temperature: 1               # Lower temperature ensures stable filtering
-      max_tokens: 60000              # Filtering tasks require fewer tokens
+      temperature: 0.6               # Lower temperature ensures stable filtering
+      max_tokens: 4096             # Filtering tasks require fewer tokens
       prompt: "fundamental_filter_v1.txt"  # Prompt file for the fundamental filter agent
     decision_agent:
-      temperature: 1               # Decision-making needs moderate creativity
-      max_tokens: 60000               # Decision tasks require more tokens
+      temperature: 0.6               # Decision-making needs moderate creativity
+      max_tokens: 4096               # Decision tasks require more tokens
       prompt: "decision_agent_v1.txt"      # Prompt file for the decision agent
   
   # Unified retry policy
@@ -86,8 +86,8 @@ llm_profiles:
   zhipuai:
     provider: "zhipuai"
     base_url: "https://open.bigmodel.cn/api/paas/v4"
-    model: "glm-4.6"
-    backtest_report_model: "glm-4.6"
+    model: "glm-4.5"
+    backtest_report_model: "glm-4.5"
     auth_required: true
     timeout_sec: 360
     retry:

@@ -169,7 +169,7 @@ main() {
         # Define test configurations
         # Empty symbols field (after last colon) will use symbols from config.yaml
         #"${PROFILE_UPPER}:2025-03-01:2025-06-01:GS,MSFT,HD,V,SHW,CAT,MCD,UNH,AXP,AMGN,TRV,CRM,JPM,IBM,HON,BA,AMZN,AAPL,PG,JNJ"
-        "${PROFILE_UPPER}_3:2025-03-01:2025-06-30:GS,MSFT,HD,V,SHW,CAT,MCD,UNH,AXP,AMGN,TRV,CRM,JPM,IBM,HON,BA,AMZN,AAPL,PG,JNJ"
+        "${PROFILE_UPPER}_1:2025-03-01:2025-06-30:GS,MSFT,HD,V,SHW,CAT,MCD,UNH,AXP,AMGN,TRV,CRM,JPM,IBM,HON,BA,AMZN,AAPL,PG,JNJ"
     )
     
     log_info "Starting execution of ${#TESTS[@]} backtest tasks"
