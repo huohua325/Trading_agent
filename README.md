@@ -60,6 +60,7 @@ Set up your API keys:（If you need to test other months or stocks, please set i
 export POLYGON_API_KEY="your_polygon_api_key"
 export FINNHUB_API_KEY="your_finnhub_api_key"
 export OPENAI_API_KEY="your_openai_api_key"
+export ZHIPUAI_API_KEY="you_zhipuai_api_key"
 ```
 
 > 💡 **Tip**: Free tiers available at [Polygon.io](https://polygon.io/) and [Finnhub.io](https://finnhub.io/)
