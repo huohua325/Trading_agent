@@ -11,7 +11,7 @@ START_DATE="${START_DATE:-2025-03-01}"    # Start date
 END_DATE="${END_DATE:-2025-06-30}"        # End date
 
 # 🤖 LLM Model Selection (Available options below)
-LLM_PROFILE="${LLM_PROFILE:-openai}"      # Current: openai (uses deepseek-v3.1-250821)
+LLM_PROFILE="${LLM_PROFILE:-zhipuai}"      # Current: openai (uses deepseek-v3.1-250821)
 # you can add different LLM models in config.yaml
 # Available LLM profiles:
 #   - openai              : OpenAI GPT models (currently set to deepseek-v3.1)
@@ -20,6 +20,7 @@ LLM_PROFILE="${LLM_PROFILE:-openai}"      # Current: openai (uses deepseek-v3.1-
 #   - qwen3-235b-a22b-instruct-2507: Qwen3 235B model
 #   - gpt-oss-20b         : GPT-OSS 20B model
 #   - gpt-oss-120b        : GPT-OSS 120B model
+#   - zhipuai             : ZhipuAI GLM-4.6 model
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 📝 Usage Examples:
@@ -98,7 +99,7 @@ run_backtest() {
     local LLM_PROFILE="$2"
     local CACHE_OPTION="$3"
     local EXTRA_OPTS="$4"
-    local LOG_FILE="${LOG_DIR}/${LLM_PROFILE}_${START_DATE}_${END_DATE}.log"
+    local LOG_FILE="${LOG_DIR}/${RUN_ID}_${START_DATE}_${END_DATE}.log"
     local START_TIME=$(date +%s)
     
     log_info "Starting backtest: ${RUN_ID}"
@@ -164,10 +165,11 @@ main() {
     
     # Define test configurations (use command line parameters)
     local TESTS=(
-        "${PROFILE_UPPER}:${START_DATE}:${END_DATE}:"
+        #"${PROFILE_UPPER}:${START_DATE}:${END_DATE}:"
         # Define test configurations
         # Empty symbols field (after last colon) will use symbols from config.yaml
         #"${PROFILE_UPPER}:2025-03-01:2025-06-01:GS,MSFT,HD,V,SHW,CAT,MCD,UNH,AXP,AMGN,TRV,CRM,JPM,IBM,HON,BA,AMZN,AAPL,PG,JNJ"
+        "${PROFILE_UPPER}_3:2025-03-01:2025-06-30:GS,MSFT,HD,V,SHW,CAT,MCD,UNH,AXP,AMGN,TRV,CRM,JPM,IBM,HON,BA,AMZN,AAPL,PG,JNJ"
     )
     
     log_info "Starting execution of ${#TESTS[@]} backtest tasks"

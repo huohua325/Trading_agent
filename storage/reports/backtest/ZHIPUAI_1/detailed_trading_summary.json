@@ -1,0 +1,14 @@
+{
+  "total_trades": 361,
+  "total_snapshots": 86,
+  "initial_cash": 100000.0,
+  "final_cash": 13207.188626623985,
+  "final_equity": 99877.056076624,
+  "final_nav": 0.9987705607662399,
+  "trading_summary": {
+    "buy_trades": 187,
+    "sell_trades": 174,
+    "total_commission": 42.320709376000025,
+    "total_realized_pnl": -3917.580802084276
+  }
+}

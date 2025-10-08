@@ -1,0 +1,54 @@
+run_id: ZHIPUAI_2_20251008_044745_170432
+period: 2025-03-03 00:00:00 ~ 2025-06-30 00:00:00
+params: commission_bps=1.0, slippage_bps=2.0, fill_ratio=1.0, news_agg=None, trim_alpha=None, strategy=N/A, timespan=day, agent_mode=dual
+benchmark: symbol=SPY, field=close, timespan=day
+metrics: cum_return=0.0020, max_drawdown=-0.1391, volatility=0.2444, sharpe=0.1456, sortino=0.0118
+trading: count=318, notional=342862.46
+relative: IR=-1.6683, TE=0.2711, alpha=-0.4522
+trades: 318 rows
+
+================================================================================
+## Metrics Concept Explanation
+
+### Core Metrics
+- **cum_return**: Cumulative return, the rise/fall of final NAV relative to initial NAV
+- **max_drawdown**: Maximum drawdown, the maximum decline of NAV relative to historical peak
+- **volatility**: Annualized volatility, daily volatility annualized (×√252)
+- **sharpe**: Sharpe ratio, annualized return divided by annualized volatility
+- **sortino**: Sortino ratio, average return divided by downside volatility
+
+### Trading Statistics
+- **trades_count**: Number of trades, total trading count during backtest period
+- **trades_notional**: Total trading amount, sum of all trade notional amounts
+
+### Relative Benchmark Metrics (shown when benchmark configured)
+- **information_ratio**: Annualized information ratio, annualized excess return divided by annualized tracking error
+- **tracking_error**: Annualized tracking error, annualized standard deviation of excess returns
+- **alpha_simple**: Simple alpha, equivalent to annualized excess return
+
+### Complete Metrics Description
+Detailed explanations for other metrics included in metrics.json:
+
+#### Extended Risk Metrics
+- **volatility_daily**: Daily volatility, standard deviation of daily returns
+- **sortino_annual**: Annualized Sortino ratio, annualized return divided by annualized downside volatility
+- **sortino_excess**: Excess Sortino ratio, Sortino calculation based on excess returns
+
+#### Extended Relative Benchmark Metrics
+- **beta**: Beta coefficient, systematic risk exposure of strategy relative to benchmark
+- **corr**: Correlation coefficient, degree of linear correlation between strategy and benchmark returns
+- **up_capture**: Upside capture ratio, relative performance of strategy when benchmark rises
+- **down_capture**: Downside capture ratio, relative performance of strategy when benchmark falls
+- **excess_return_total**: Total excess return, cumulative excess return of strategy relative to benchmark
+- **excess_return_annual**: Annualized excess return, annualized representation of total excess return
+- **hit_ratio_active**: Active hit ratio, proportion of trading days when strategy outperforms benchmark
+
+#### Rolling Window Metrics
+- **rolling_ir_63/126/252**: 63/126/252-day rolling information ratio
+- **tracking_error_daily**: Daily tracking error, daily standard deviation of excess returns
+- **information_ratio_daily**: Daily information ratio, daily excess return divided by daily tracking error
+- **rolling_te_63/126/252**: 63/126/252-day rolling tracking error
+
+#### Other Statistical Metrics
+- **n**: Sample size, number of effective trading days during backtest period
+- **freq**: Data frequency identifier (only supports day)

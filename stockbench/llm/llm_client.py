@@ -7,7 +7,7 @@ import re
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Tuple
 from datetime import datetime, timedelta
-
+from zai import ZhipuAiClient
 import httpx
 from loguru import logger
 import openai  # Add OpenAI official client
@@ -796,9 +796,15 @@ class LLMClient:
         
         headers: Dict[str, str] = {"Content-Type": "application/json"}
         if need_auth:
-            if self.api_key:
-                headers["Authorization"] = f"Bearer {self.api_key}"
-                self.llm_logger.debug(f"🔑 Add authentication header")
+            # Choose provider-specific API key source
+            if provider == "zhipuai":
+                effective_api_key = os.getenv("ZHIPUAI_API_KEY")
+            else:
+                effective_api_key = self.api_key
+
+            if effective_api_key:
+                headers["Authorization"] = f"Bearer {effective_api_key}"
+                self.llm_logger.debug("🔑 Add authentication header")
             else:
                 self.llm_logger.error(f"❌ Authentication required but no API key provided - {provider}")
                 return None, {**meta, "reason": "no_api_key"}
@@ -825,8 +831,8 @@ class LLMClient:
             try:
                 self.llm_logger.debug(f"🔄 Request sent - Attempt {attempt + 1}/{cfg.max_retries + 1}")
                 
-                # Prioritize using OpenAI official client (unless other provider explicitly specified)
-                if provider in ["openai", "openai-official"] or provider not in ["vllm", "llama.cpp", "none", "openai-compatible", "openai-compatible-no-auth"]:
+                # Prioritize using OpenAI official client only when provider is explicitly OpenAI
+                if provider in ["openai", "openai-official"]:
                     result = self._call_openai_official(cfg, system_prompt, user_prompt)
                     
                     if result["status_code"] == 200:
@@ -913,9 +919,66 @@ class LLMClient:
                         else:
                             return None, {**meta, "reason": error_msg}
                 
-                # Other providers use the original method
+                # Other providers use provider-specific methods
                 else:
-                    if provider == "openai-compatible" or provider == "openai-compatible-no-auth":
+                    if provider == "zhipuai":
+                        # Use official ZhipuAI SDK, return unified result
+                        result = self._call_zhipuai(cfg, system_prompt, user_prompt)
+                        
+                        if result["status_code"] == 200:
+                            end_ts = time.time()
+                            meta["latency_ms"] = int((end_ts - start_ts) * 1000)
+                            
+                            response_data = result["data"]
+                            content = response_data.get("choices", [{}])[0].get("message", {}).get("content", "")
+                            
+                            usage = response_data.get("usage", {})
+                            self._prompt_tokens_used += usage.get("prompt_tokens", 0)
+                            self._completion_tokens_used += usage.get("completion_tokens", 0)
+                            meta["usage"] = usage
+                            
+                            if not content or not content.strip():
+                                self.llm_logger.warning("⚠️ LLM returned empty content")
+                                return {"raw_content": ""}, meta
+                            
+                            content = content.strip()
+                            try:
+                                parsed = json.loads(content)
+                                cache_write = cfg.cache_write_enabled if cfg.cache_write_enabled is not None else cfg.cache_enabled
+                                if cache_write and self.cache_dir:
+                                    cache_key = self._make_cache_key_with_date(role, cfg, system_prompt, user_prompt, trade_date, retry_attempt)
+                                    self._cache_payload(cache_key, parsed, role, cfg, system_prompt, user_prompt, run_id, response_data, retry_attempt)
+                                return parsed, meta
+                            except json.JSONDecodeError:
+                                extracted_json = self._extract_json_with_improved_logic(content)
+                                if extracted_json:
+                                    cache_write = cfg.cache_write_enabled if cfg.cache_write_enabled is not None else cfg.cache_enabled
+                                    if cache_write and self.cache_dir:
+                                        cache_key = self._make_cache_key_with_date(role, cfg, system_prompt, user_prompt, trade_date, retry_attempt)
+                                        self._cache_payload(cache_key, extracted_json, role, cfg, system_prompt, user_prompt, run_id, response_data, retry_attempt)
+                                    return extracted_json, meta
+                                return {"raw_content": content}, meta
+                        elif result["status_code"] == 401:
+                            self.llm_logger.error(f"❌ Authentication error: {result.get('error', 'Unknown')}")
+                            return None, {**meta, "reason": f"auth_error: {result.get('error', 'Unknown')}"}
+                        elif result["status_code"] == 429:
+                            wait_time = (cfg.backoff_factor ** attempt)
+                            self.llm_logger.warning(f"⏱️ Rate limit - Wait {wait_time}s (Attempt {attempt + 1})")
+                            if attempt < cfg.max_retries:
+                                time.sleep(wait_time)
+                                continue
+                            else:
+                                return None, {**meta, "reason": "rate_limit_exceeded"}
+                        else:
+                            error_msg = result.get("error", f"HTTP {result['status_code']}")
+                            wait_time = (cfg.backoff_factor ** attempt)
+                            self.llm_logger.error(f"❌ API error {result['status_code']} - Attempt {attempt + 1}: {error_msg[:100]}")
+                            if attempt < cfg.max_retries:
+                                time.sleep(wait_time)
+                                continue
+                            else:
+                                return None, {**meta, "reason": error_msg}
+                    elif provider == "openai-compatible" or provider == "openai-compatible-no-auth":
                         response = self._call_openai_compatible(cfg, headers, body)
                     elif provider == "vllm":
                         response = self._call_vllm(cfg, headers, body)
@@ -1135,6 +1198,62 @@ class LLMClient:
         response = client.post("/chat/completions", headers=headers, json=body)
         self.llm_logger.debug(f"📥 API response - Status code: {response.status_code}")
         return response
+
+    def _call_zhipuai(self, cfg: LLMConfig, system_prompt: str, user_prompt: str) -> Dict[str, Any]:
+        """Call ZhipuAI API via official SDK and return unified result structure
+        Reference: ZhipuAI GLM-4.6 docs (Python) - https://docs.bigmodel.cn/cn/guide/models/text/glm-4.6#python
+        """
+        try:
+            api_key = os.getenv("ZHIPUAI_API_KEY") or self.api_key
+            client = ZhipuAiClient(api_key=api_key)
+            # Build messages according to our call style
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ]
+            # Thinking is optional; enable by default for GLM-4.6 stability
+            thinking = {"type": "enabled"}
+            resp = client.chat.completions.create(
+                model=cfg.model,
+                messages=messages,
+                thinking=thinking,
+                max_tokens=cfg.max_tokens,
+                temperature=cfg.temperature,
+                timeout=cfg.timeout_sec
+            )
+
+            # Convert SDK response to unified dict format like OpenAI path
+            try:
+                # response.choices[0].message may be object or string; ensure string content
+                message_obj = resp.choices[0].message
+                content = getattr(message_obj, "content", None)
+                if content is None:
+                    content = str(message_obj)
+                usage = getattr(resp, "usage", {}) or {}
+            except Exception:
+                content = ""
+                usage = {}
+
+            data = {
+                "choices": [
+                    {"message": {"content": content}}
+                ],
+                "usage": {
+                    "prompt_tokens": usage.get("prompt_tokens", 0),
+                    "completion_tokens": usage.get("completion_tokens", 0),
+                    "total_tokens": usage.get("total_tokens", usage.get("prompt_tokens", 0) + usage.get("completion_tokens", 0))
+                }
+            }
+            return {"status_code": 200, "data": data}
+        except Exception as e:
+            # Map common error types to status codes
+            err_text = str(e)
+            status = 400
+            if "401" in err_text or "Unauthorized" in err_text or "authenticate" in err_text or "authentication" in err_text:
+                status = 401
+            elif "429" in err_text or "Rate" in err_text or "rate limit" in err_text:
+                status = 429
+            return {"status_code": status, "error": f"{err_text}"}
 
     def _call_vllm(self, cfg: LLMConfig, headers: Dict[str, str], body: Dict[str, Any]) -> httpx.Response:
         """Call vLLM API (using OpenAI-compatible format)
