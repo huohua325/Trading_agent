@@ -853,14 +853,26 @@ class LLMClient:
                         # Parse JSON content
                         if not content or not content.strip():
                             self.llm_logger.warning("⚠️ LLM returned empty content")
-                            return {"raw_content": ""}, meta
+                            empty_result = {"raw_content": ""}
+                            # Save empty result to cache
+                            cache_write = cfg.cache_write_enabled if cfg.cache_write_enabled is not None else cfg.cache_enabled
+                            if cache_write and self.cache_dir:
+                                cache_key = self._make_cache_key_with_date(role, cfg, system_prompt, user_prompt, trade_date, retry_attempt)
+                                self._cache_payload(cache_key, empty_result, role, cfg, system_prompt, user_prompt, run_id, response_data, retry_attempt)
+                            return empty_result, meta
                         
                         content = content.strip()
                         
                         # Check again if content is empty (prevent JSON parsing failure)
                         if not content:
                             self.llm_logger.warning("⚠️ Content is empty after preprocessing, cannot parse JSON")
-                            return {"raw_content": ""}, meta
+                            empty_result = {"raw_content": ""}
+                            # Save empty result to cache
+                            cache_write = cfg.cache_write_enabled if cfg.cache_write_enabled is not None else cfg.cache_enabled
+                            if cache_write and self.cache_dir:
+                                cache_key = self._make_cache_key_with_date(role, cfg, system_prompt, user_prompt, trade_date, retry_attempt)
+                                self._cache_payload(cache_key, empty_result, role, cfg, system_prompt, user_prompt, run_id, response_data, retry_attempt)
+                            return empty_result, meta
                         
                         # First try to parse JSON directly (compatible with pure JSON responses)
                         try:
@@ -939,7 +951,13 @@ class LLMClient:
                             
                             if not content or not content.strip():
                                 self.llm_logger.warning("⚠️ LLM returned empty content")
-                                return {"raw_content": ""}, meta
+                                empty_result = {"raw_content": ""}
+                                # Save empty result to cache
+                                cache_write = cfg.cache_write_enabled if cfg.cache_write_enabled is not None else cfg.cache_enabled
+                                if cache_write and self.cache_dir:
+                                    cache_key = self._make_cache_key_with_date(role, cfg, system_prompt, user_prompt, trade_date, retry_attempt)
+                                    self._cache_payload(cache_key, empty_result, role, cfg, system_prompt, user_prompt, run_id, response_data, retry_attempt)
+                                return empty_result, meta
                             
                             content = content.strip()
                             try:
@@ -1012,14 +1030,26 @@ class LLMClient:
                         # Preprocess content
                         if not content or not content.strip():
                             self.llm_logger.warning("⚠️ LLM returned empty content")
-                            return {"raw_content": ""}, meta
+                            empty_result = {"raw_content": ""}
+                            # Save empty result to cache
+                            cache_write = cfg.cache_write_enabled if cfg.cache_write_enabled is not None else cfg.cache_enabled
+                            if cache_write and self.cache_dir:
+                                cache_key = self._make_cache_key_with_date(role, cfg, system_prompt, user_prompt, trade_date, retry_attempt)
+                                self._cache_payload(cache_key, empty_result, role, cfg, system_prompt, user_prompt, run_id, response_data, retry_attempt)
+                            return empty_result, meta
                         
                         content = content.strip()
                         
                         # Check again if content is empty (prevent JSON parsing failure)
                         if not content:
                             self.llm_logger.warning("⚠️ Content is empty after preprocessing, cannot parse JSON")
-                            return {"raw_content": ""}, meta
+                            empty_result = {"raw_content": ""}
+                            # Save empty result to cache
+                            cache_write = cfg.cache_write_enabled if cfg.cache_write_enabled is not None else cfg.cache_enabled
+                            if cache_write and self.cache_dir:
+                                cache_key = self._make_cache_key_with_date(role, cfg, system_prompt, user_prompt, trade_date, retry_attempt)
+                                self._cache_payload(cache_key, empty_result, role, cfg, system_prompt, user_prompt, run_id, response_data, retry_attempt)
+                            return empty_result, meta
                         
                         # Try to parse JSON
                         try:
