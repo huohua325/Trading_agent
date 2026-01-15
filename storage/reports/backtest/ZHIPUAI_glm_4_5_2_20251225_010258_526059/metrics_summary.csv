@@ -1,0 +1,2 @@
+run_id,cagr,cum_return,max_drawdown,volatility_daily,sortino,trades_count,trades_notional,information_ratio_daily,excess_return_total,volatility,sharpe,information_ratio
+ZHIPUAI_glm_4_5_2_20251225_010258_526059,0.0,0.0,0.0,0.0,0.0,0,0.0,0.02818544509117021,0.0013984021298144578,0.0,0.0,0.4474300698174157

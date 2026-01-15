@@ -59,11 +59,11 @@ agents:
   dual_agent:
     fundamental_filter:
       temperature: 0.6               # Lower temperature ensures stable filtering
-      max_tokens: 4096             # Filtering tasks require fewer tokens
+      max_tokens: 8192             # Filtering tasks require fewer tokens
       prompt: "fundamental_filter_v1.txt"  # Prompt file for the fundamental filter agent
     decision_agent:
       temperature: 0.6               # Decision-making needs moderate creativity
-      max_tokens: 4096               # Decision tasks require more tokens
+      max_tokens: 8192               # Decision tasks require more tokens (increased for 20 stocks)
       prompt: "decision_agent_v1.txt"      # Prompt file for the decision agent
   
   # Unified retry policy
@@ -74,9 +74,9 @@ agents:
 llm_profiles:
   openai:
     provider: "openai"
-    base_url: ""
-    model: "oss-120b"
-    backtest_report_model: "oss-120b"
+    base_url: "https://api.chatanywhere.tech/v1/"
+    model: "gpt-4o-mini"
+    backtest_report_model: "gpt-4o-mini"
     auth_required: true
     timeout_sec: 360  # Increased timeout for deepseek (was 60)
     retry:
@@ -154,13 +154,36 @@ llm_profiles:
   vllm:
     provider: "vllm"
     base_url: "http://localhost:8000/v1"
-    single_agent_model: "qwen2.5-7b-instruct"
-    backtest_report_model: "qwen2.5-7b-instruct"
+    model: "Qwen/Qwen2.5-7B-Instruct"
+    backtest_report_model: "Qwen/Qwen2.5-7B-Instruct"
     auth_required: false  # Local vLLM typically does not require authentication
     timeout_sec: 120      # Local inference can be slower; increase timeout
     retry:
       max_retries: 2 # Network/API-level retries (not business-related)
       backoff_factor: 1.0
+
+  # Ollama local deployment (lightweight local models)
+  ollama:
+    provider: "ollama"
+    base_url: "http://localhost:11434/v1"
+    model: "llama3"
+    backtest_report_model: "llama3"
+    auth_required: false
+    timeout_sec: 180      # Ollama can be slower on first load
+    retry:
+      max_retries: 2
+      backoff_factor: 1.0
+
+  # Auto-detect profile (根据环境变量自动选择提供商)
+  auto:
+    provider: "auto"      # 自动检测: ZHIPUAI_API_KEY > base_url > OPENAI_API_KEY
+    base_url: ""          # 留空，由自动检测填充
+    model: ""             # 留空，由自动检测填充
+    auth_required: null   # null 表示根据检测到的 provider 决定
+    timeout_sec: 60
+    retry:
+      max_retries: 3
+      backoff_factor: 0.5
 
   # Mock profile (for testing)
   none:

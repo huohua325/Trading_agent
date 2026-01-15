@@ -5,9 +5,7 @@ Solves problems of inconsistent price data field names and confusing calculation
 """
 
 from typing import Dict, Optional, Any
-import logging
-
-logger = logging.getLogger(__name__)
+from loguru import logger
 
 
 def get_unified_price(symbol: str, ctx: Dict, portfolio: Dict = None, 
@@ -34,26 +32,20 @@ def get_unified_price(symbol: str, ctx: Dict, portfolio: Dict = None,
     elif price_type == "mark":
         field_names = ["mark_map", "mark_price_map", "mark_prices", "close_map"]
     else:
-        logger.warning(f"Unsupported price type: {price_type}")
+        logger.warning(
+            "[BT_PRICE] Unsupported price type",
+            price_type=price_type
+        )
         return fallback_price
     
     # 1. Priority retrieval from ctx
     if ctx:
-        logger.debug(f"[PRICE_UTIL] {symbol}: Starting to search {price_type} price from ctx, available fields: {list(ctx.keys())}")
         for field_name in field_names:
             price_map = ctx.get(field_name, {})
-            logger.debug(f"[PRICE_UTIL] {symbol}: Checking ctx.{field_name}, type={type(price_map)}, length={len(price_map) if isinstance(price_map, dict) else 'N/A'}")
             if isinstance(price_map, dict) and symbol in price_map:
                 price = price_map[symbol]
                 if price is not None and price > 0:
-                    logger.debug(f"[PRICE_UTIL] {symbol}: Got {price_type} price from ctx.{field_name} = {price:.4f}")
                     return float(price)
-                else:
-                    logger.debug(f"[PRICE_UTIL] {symbol}: ctx.{field_name}[{symbol}] price invalid: {price}")
-            elif isinstance(price_map, dict):
-                logger.debug(f"[PRICE_UTIL] {symbol}: {symbol} not found in ctx.{field_name}, has: {list(price_map.keys())[:5]}")
-    else:
-        logger.debug(f"[PRICE_UTIL] {symbol}: ctx is empty")
     
     # 2. Fallback to portfolio retrieval
     if portfolio:
@@ -62,15 +54,17 @@ def get_unified_price(symbol: str, ctx: Dict, portfolio: Dict = None,
             if isinstance(price_map, dict) and symbol in price_map:
                 price = price_map[symbol]
                 if price is not None and price > 0:
-                    logger.debug(f"[PRICE_UTIL] {symbol}: Got {price_type} price from portfolio.{field_name} = {price:.4f}")
                     return float(price)
     
     # 3. Final fallback
     if fallback_price is not None and fallback_price > 0:
-        logger.debug(f"[PRICE_UTIL] {symbol}: Using fallback price = {fallback_price:.4f}")
         return float(fallback_price)
     
-    logger.warning(f"[PRICE_UTIL] {symbol}: Unable to get {price_type} price")
+    logger.warning(
+        "[BT_PRICE] Unable to get price",
+        symbol=symbol,
+        price_type=price_type
+    )
     return None
 
 

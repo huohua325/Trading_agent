@@ -11,14 +11,14 @@ Design objectives:
 """
 from __future__ import annotations
 
-import logging
-
-logger = logging.getLogger(__name__)
 from typing import Dict, List
 import pandas as pd
+from loguru import logger
 
 from stockbench.core.executor import decide_batch as unified_decide_batch
 from stockbench.core import data_hub
+from stockbench.core.pipeline_context import PipelineContext
+from stockbench.tools import ToolRegistry
 
 
 class Strategy:
@@ -31,9 +31,13 @@ class Strategy:
     - news_lookback_days: News lookback window days for feature construction
     - page_limit: News item retrieval limit
     - warmup_days: Historical lookback days needed for feature construction (e.g., moving averages, financials)
-    - agent_mode: Agent mode, "multi" (multi-agent) or "single" (single-agent)
-    - previous_decisions: Previous decision results for backward compatibility
-    - decision_history: Long-term historical decision records, storing all historical decisions by date and symbol
+    - agent_mode: Agent mode, "dual" (dual-agent) or "single" (single-agent)
+    - pending_decisions: Temporary storage for decisions waiting to be recorded after order execution
+    - pending_meta: Metadata for pending decisions
+    - pending_date: Date for pending decisions
+    
+    Note: Historical decision records are now managed by the new Memory system (ctx.memory.episodes) 
+    in the Agent layer, not in this Strategy class.
     """
     def __init__(self, cfg: Dict) -> None:
         """Initialize strategy.
@@ -50,406 +54,20 @@ class Strategy:
         self.agent_mode = str(agents_mode or "single").lower()
         
         # Debug: Detailed configuration parsing process
-        logger.debug(f"[DEBUG] Agent mode configuration parsing:")
-        logger.debug(f"  - agents.mode: {agents_mode}")
-        logger.debug(f"  - Final agent_mode: {self.agent_mode}")
-        
-        # Store previous decision results for backward compatibility
-        self.previous_decisions: Dict | None = None
-        
-        # Long-term historical decision record system
-        # Structure: {symbol: [{"date": "YYYY-MM-DD", "decision": {...}, "meta": {...}}, ...]}
-        self.decision_history: Dict[str, List[Dict]] = {}
-        
-        # Get historical record parameters from configuration
-        history_cfg = (cfg or {}).get("backtest", {}).get("history", {})
-        self.max_records_per_symbol = int(history_cfg.get("max_records_per_symbol", 10))
-        self.max_history_days = int(history_cfg.get("max_history_days", 30))
+        logger.debug(
+            "[SYS_CONFIG] Agent mode configuration",
+            agents_mode=agents_mode,
+            final_agent_mode=self.agent_mode
+        )
         
         # Temporary storage for pending decisions (to be recorded after execution)
+        # These will be saved to ctx.memory.episodes after order execution
         self.pending_decisions: Dict[str, Dict] = {}
         self.pending_meta: Dict = {}
+        self.pending_date: str = ""
         
-        logger.debug(f"[DEBUG] Strategy initialization: Long-term historical record system enabled")
-        logger.debug(f"[DEBUG] Strategy initialization: Maximum {self.max_records_per_symbol} historical records per symbol")
-        logger.debug(f"[DEBUG] Strategy initialization: Maximum {self.max_history_days} days of historical records")
+        logger.debug("[MEM_OP] Strategy initialization: Using new Memory system (ctx.memory.episodes)")
     
-    def _add_decision_to_history(self, date: str, decisions: Dict[str, Dict], meta: Dict = None, clear_date_first: bool = False):
-        """Add decision results to long-term historical records
-        
-        Args:
-            date: Decision date in YYYY-MM-DD format
-            decisions: Decision results dictionary
-            meta: Meta information
-            clear_date_first: Whether to clear existing records for this date first (override mechanism)
-        """
-        logger.info(f"=== Long-term Historical Record Save Started ===")
-        logger.info(f"[HISTORY_SAVE] Starting to save decision records for date {date}")
-        logger.debug(f"[HISTORY_SAVE] Input decisions type: {type(decisions)}")
-        logger.debug(f"[HISTORY_SAVE] Input decisions keys: {list(decisions.keys()) if decisions else 'None'}")
-        logger.debug(f"[HISTORY_SAVE] Input meta: {meta}")
-        logger.debug(f"[HISTORY_SAVE] Clear date first: {clear_date_first}")
-        
-        if not decisions:
-            logger.warning(f"[HISTORY_SAVE] Warning: No decision data to save")
-            return
-        
-        # Override mechanism: Clear existing records for this date first
-        if clear_date_first:
-            logger.info(f"[HISTORY_SAVE] Override mode enabled, clearing existing records for date {date}")
-            self._clear_decisions_for_date(date)
-            
-        # Extract decision records (excluding meta information)
-        decision_records = {k: v for k, v in decisions.items() if k != "__meta__"}
-        logger.info(f"[HISTORY_SAVE] Extracted decision records for {len(decision_records)} symbols")
-        logger.debug(f"[HISTORY_SAVE] Decision record symbols: {list(decision_records.keys())}")
-        
-        # Historical record state before saving
-        logger.debug(f"[HISTORY_SAVE] Historical record state before saving:")
-        for symbol, records in self.decision_history.items():
-            logger.debug(f"  - {symbol}: {len(records)} records")
-            if records:
-                latest = records[0]
-                logger.debug(f"    Latest record: date={latest.get('date', 'N/A')}, action={latest.get('decision', {}).get('action', 'N/A')}")
-        
-        saved_count = 0
-        for symbol, decision in decision_records.items():
-            logger.debug(f"[HISTORY_SAVE] Processing symbol {symbol}:")
-            logger.debug(f"  - Decision content: {decision}")
-            
-            if not isinstance(decision, dict):
-                logger.warning(f"  - Skipping: Decision is not in dictionary format")
-                continue
-                
-            # Ensure the historical record list for this symbol exists
-            if symbol not in self.decision_history:
-                self.decision_history[symbol] = []
-                logger.debug(f"  - Created new historical record list")
-            else:
-                logger.debug(f"  - Existing historical record count: {len(self.decision_history[symbol])}")
-            
-            # Build historical record entry
-            history_entry = {
-                "date": date,
-                "decision": decision.copy(),  # Copy decision content
-                "meta": meta.copy() if meta else {}
-            }
-            logger.debug(f"  - Built historical record entry: {history_entry}")
-            
-            # Add to the beginning of historical record list (newest first)
-            self.decision_history[symbol].insert(0, history_entry)
-            logger.debug(f"  - Added to beginning of historical record list")
-            
-            # Limit the number of historical records per symbol
-            if len(self.decision_history[symbol]) > self.max_records_per_symbol:
-                removed_count = len(self.decision_history[symbol]) - self.max_records_per_symbol
-                self.decision_history[symbol] = self.decision_history[symbol][:self.max_records_per_symbol]
-                logger.info(f"[HISTORY_LIMIT] {symbol}: Cleaned {removed_count} old records, keeping latest {self.max_records_per_symbol} records")
-            
-            logger.debug(f"  - Historical record count after saving: {len(self.decision_history[symbol])}")
-            saved_count += 1
-        
-        logger.info(f"=== Long-term Historical Record Save Completed ===")
-        logger.info(f"[HISTORY_SAVE] Successfully saved decision records for {saved_count} symbols")
-        logger.info(f"[HISTORY_SAVE] Current historical record statistics: Total {len(self.decision_history)} symbols have historical records")
-        
-        # Detailed post-save state
-        for symbol, records in self.decision_history.items():
-            logger.debug(f"[HISTORY_SAVE] {symbol}: {len(records)} historical records")
-            if records:
-                logger.debug(f"  - Latest record: date={records[0].get('date', 'N/A')}")
-                latest_decision = records[0].get('decision', {})
-                logger.debug(f"    action={latest_decision.get('action', 'N/A')}")
-                logger.debug(f"    target_cash_amount={latest_decision.get('target_cash_amount', 'N/A')}")
-                logger.debug(f"    confidence={latest_decision.get('confidence', 'N/A')}")
-                
-                if len(records) > 1:
-                    logger.debug(f"  - Historical record timeline:")
-                    for i, record in enumerate(records[:5]):  # Only show first 5 records
-                        logger.debug(f"    {i+1}. {record.get('date', 'N/A')} - {record.get('decision', {}).get('action', 'N/A')}")
-                    if len(records) > 5:
-                        logger.debug(f"    ... {len(records) - 5} more records")
-        
-        logger.info(f"=== Long-term Historical Record Save Ended ===\n")
-    
-    def _get_decision_history_for_prompt(self, symbols: List[str] = None) -> Dict[str, List[Dict]]:
-        """Get historical decision records for building prompts"""
-        logger.info(f"\n=== Historical Record Building Started ===")
-        logger.info(f"[HISTORY_BUILD] Starting to build historical decision records for prompt")
-        logger.debug(f"[HISTORY_BUILD] Requested symbol count: {len(symbols) if symbols else 'all'}")
-        logger.debug(f"[HISTORY_BUILD] Requested symbols: {symbols if symbols else 'all available symbols'}")
-        
-        history_for_prompt = {}
-        
-        # If no symbols specified, return all historical records
-        target_symbols = symbols if symbols else list(self.decision_history.keys())
-        logger.debug(f"[HISTORY_BUILD] Target symbols: {target_symbols}")
-        logger.debug(f"[HISTORY_BUILD] Symbols in current long-term historical records: {list(self.decision_history.keys())}")
-        
-        found_count = 0
-        for symbol in target_symbols:
-            logger.debug(f"\n[HISTORY_BUILD] Processing symbol {symbol}:")
-            
-            if symbol in self.decision_history:
-                # Convert historical record format to prompt-required format
-                symbol_history = []
-                original_records = self.decision_history[symbol]
-                logger.debug(f"  - Found {len(original_records)} original historical records")
-                
-                for i, entry in enumerate(original_records):
-                    decision = entry["decision"]
-                    logger.debug(f"  - Processing record {i+1}:")
-                    logger.debug(f"    Original date: {entry.get('date', 'N/A')}")
-                    logger.debug(f"    Original decision: {decision}")
-                    
-                    history_record = {
-                        "date": entry["date"],
-                        "action": decision.get("action", "hold"),
-                        "cash_change": decision.get("cash_change", 0.0),
-                        "target_cash_amount": decision.get("target_cash_amount", 0.0),
-                        "shares": decision.get("shares", 0.0),
-                        "confidence": decision.get("confidence", 0.5)
-                    }
-                    logger.debug(f"    Converted record: {history_record}")
-                    symbol_history.append(history_record)
-                
-                history_for_prompt[symbol] = symbol_history
-                found_count += 1
-                logger.debug(f"  - Successfully built {len(symbol_history)} historical records for prompt")
-            else:
-                logger.warning(f"  - Warning: Symbol {symbol} does not exist in long-term historical records")
-                logger.debug(f"  - Will return empty historical records")
-                history_for_prompt[symbol] = []
-        
-        logger.info(f"\n=== Historical Record Building Completed ===")
-        logger.info(f"[HISTORY_BUILD] Successfully built historical records for {found_count} symbols")
-        logger.info(f"[HISTORY_BUILD] Returned historical record statistics:")
-        for symbol, records in history_for_prompt.items():
-            logger.debug(f"  - {symbol}: {len(records)} records")
-            if records:
-                logger.debug(f"    Latest record: {records[0].get('date', 'N/A')} - {records[0].get('action', 'N/A')}")
-                logger.debug(f"    Record time range: {records[-1].get('date', 'N/A')} to {records[0].get('date', 'N/A')}")
-        
-        logger.info(f"=== Historical Record Building Ended ===\n")
-        return history_for_prompt
-    
-    def _cleanup_old_history(self, current_date: str):
-        """Clean up expired historical records"""
-        logger.info(f"\n=== Historical Record Cleanup Started ===")
-        logger.info(f"[HISTORY_CLEANUP] Starting to clean up expired historical records")
-        logger.debug(f"[HISTORY_CLEANUP] Current date: {current_date}")
-        logger.debug(f"[HISTORY_CLEANUP] Maximum retention days: {self.max_history_days}")
-        
-        try:
-            from datetime import datetime, timedelta
-            current_dt = datetime.strptime(current_date, "%Y-%m-%d")
-            cutoff_date = current_dt - timedelta(days=self.max_history_days)
-            cutoff_date_str = cutoff_date.strftime("%Y-%m-%d")
-            logger.debug(f"[HISTORY_CLEANUP] Cutoff date: {cutoff_date_str}")
-            
-            # State before cleanup
-            logger.debug(f"[HISTORY_CLEANUP] Historical record state before cleanup:")
-            total_records_before = 0
-            for symbol, records in self.decision_history.items():
-                logger.debug(f"  - {symbol}: {len(records)} records")
-                total_records_before += len(records)
-                if records:
-                    oldest_date = records[-1].get('date', 'N/A')
-                    newest_date = records[0].get('date', 'N/A')
-                    logger.debug(f"    Time range: {oldest_date} to {newest_date}")
-            logger.debug(f"  - Total: {total_records_before} records")
-            
-            cleaned_count = 0
-            symbols_to_remove = []
-            
-            for symbol in list(self.decision_history.keys()):
-                logger.debug(f"\n[HISTORY_CLEANUP] Processing symbol {symbol}:")
-                original_count = len(self.decision_history[symbol])
-                logger.debug(f"  - Original record count: {original_count}")
-                
-                # Filter out expired records
-                original_records = self.decision_history[symbol]
-                valid_records = [
-                    entry for entry in original_records
-                    if entry["date"] >= cutoff_date_str
-                ]
-                expired_records = [
-                    entry for entry in original_records
-                    if entry["date"] < cutoff_date_str
-                ]
-                
-                logger.debug(f"  - Valid record count: {len(valid_records)}")
-                logger.debug(f"  - Expired record count: {len(expired_records)}")
-                
-                if expired_records:
-                    logger.debug(f"  - Expired record details:")
-                    for i, record in enumerate(expired_records[:3]):  # Only show first 3 records
-                        logger.debug(f"    {i+1}. {record.get('date', 'N/A')} - {record.get('decision', {}).get('action', 'N/A')}")
-                    if len(expired_records) > 3:
-                        logger.debug(f"    ... {len(expired_records) - 3} more expired records")
-                
-                # Update historical records
-                self.decision_history[symbol] = valid_records
-                expired_count = original_count - len(valid_records)
-                cleaned_count += expired_count
-                
-                # Log cleanup results
-                if expired_count > 0:
-                    logger.info(f"[HISTORY_CLEANUP] {symbol}: Removed {expired_count} expired records (older than {cutoff_date_str}), {len(valid_records)} records remaining")
-                
-                # If a symbol has no historical records left, mark for deletion
-                if not valid_records:
-                    logger.info(f"[HISTORY_CLEANUP] {symbol}: No valid records left, removing symbol from history")
-                    symbols_to_remove.append(symbol)
-                    logger.debug(f"  - Mark for deletion: no valid records")
-                else:
-                    logger.debug(f"  - Retained record count: {len(valid_records)}")
-                    oldest_valid = valid_records[-1].get('date', 'N/A')
-                    newest_valid = valid_records[0].get('date', 'N/A')
-                    logger.debug(f"  - Valid record time range: {oldest_valid} to {newest_valid}")
-            
-            # Delete symbols with no historical records
-            for symbol in symbols_to_remove:
-                del self.decision_history[symbol]
-                logger.debug(f"[HISTORY_CLEANUP] Delete symbol {symbol}: no valid historical records")
-            
-            # State after cleanup
-            logger.debug(f"\n[HISTORY_CLEANUP] Historical record state after cleanup:")
-            total_records_after = 0
-            for symbol, records in self.decision_history.items():
-                logger.debug(f"  - {symbol}: {len(records)} records")
-                total_records_after += len(records)
-            logger.debug(f"  - Total: {total_records_after} records")
-            
-            if cleaned_count > 0:
-                logger.debug(f"\n[HISTORY_CLEANUP] Cleanup completed: cleaned {cleaned_count} expired records")
-                logger.debug(f"[HISTORY_CLEANUP] Record reduction: {total_records_before} -> {total_records_after}")
-            else:
-                logger.debug(f"\n[HISTORY_CLEANUP] Cleanup completed: no expired records to clean")
-                
-        except Exception as e:
-            logger.error(f"[HISTORY_CLEANUP] Error: Historical record cleanup failed: {e}")
-            import traceback
-            logger.error(f"[HISTORY_CLEANUP] Error details: {traceback.format_exc()}")
-        
-        logger.info(f"=== Historical Record Cleanup Ended ===\n")
-    
-    def _clear_decisions_for_date(self, target_date: str):
-        """Clear decision records for a specific date (used for retry mechanism)
-        
-        Args:
-            target_date: Target date in YYYY-MM-DD format
-        """
-        logger.info(f"\n=== Clear Target Date Decision Records Started ===")
-        logger.info(f"[DATE_CLEAR] Starting to clear decision records for date: {target_date}")
-        
-        cleared_symbols = []
-        total_cleared_records = 0
-        
-        # Iterate through all symbols and clear records for the target date
-        for symbol in list(self.decision_history.keys()):
-            original_count = len(self.decision_history[symbol])
-            logger.debug(f"[DATE_CLEAR] Processing symbol {symbol}: original record count = {original_count}")
-            
-            # Filter out records from the target date
-            filtered_records = [
-                record for record in self.decision_history[symbol]
-                if record.get("date") != target_date
-            ]
-            
-            cleared_count = original_count - len(filtered_records)
-            if cleared_count > 0:
-                self.decision_history[symbol] = filtered_records
-                cleared_symbols.append(symbol)
-                total_cleared_records += cleared_count
-                logger.debug(f"[DATE_CLEAR] {symbol}: cleared {cleared_count} records for date {target_date}")
-                
-                # If no records remain for this symbol, delete the symbol
-                if not filtered_records:
-                    del self.decision_history[symbol]
-                    logger.debug(f"[DATE_CLEAR] {symbol}: symbol deleted (no remaining records)")
-            else:
-                logger.debug(f"[DATE_CLEAR] {symbol}: no records found for date {target_date}")
-        
-        logger.info(f"\n=== Clear Target Date Decision Records Completed ===")
-        logger.info(f"[DATE_CLEAR] Summary:")
-        logger.info(f"  - Target date: {target_date}")
-        logger.info(f"  - Symbols affected: {len(cleared_symbols)}")
-        logger.info(f"  - Total records cleared: {total_cleared_records}")
-        if cleared_symbols:
-            logger.info(f"  - Affected symbols: {cleared_symbols}")
-        logger.info(f"  - Remaining symbols with records: {len(self.decision_history)}")
-        logger.info(f"=== Clear Target Date Decision Records Ended ===\n")
-    
-    def _build_previous_decisions_for_compatibility(self, current_date: str) -> Dict:
-        """For backward compatibility, build previous_decisions format"""
-        logger.info(f"\n=== Backward Compatibility Build Started ===")
-        logger.info(f"[COMPATIBILITY_BUILD] Starting to build backward-compatible previous_decisions format")
-        logger.debug(f"[COMPATIBILITY_BUILD] Current date: {current_date}")
-        logger.debug(f"[COMPATIBILITY_BUILD] Long-term historical record status: {len(self.decision_history)} symbols")
-        
-        if not self.decision_history:
-            logger.warning(f"[COMPATIBILITY_BUILD] Warning: no long-term historical records, returning None")
-            logger.info(f"=== Backward Compatibility Build Ended ===\n")
-            return None
-            
-        # Find the most recent decision date
-        latest_date = None
-        latest_decisions = {}
-        
-        logger.debug(f"[COMPATIBILITY_BUILD] Analyzing latest decision dates for all symbols:")
-        for symbol, records in self.decision_history.items():
-            if records:
-                record_date = records[0]["date"]  # Latest record
-                logger.debug(f"  - {symbol}: latest record date {record_date}")
-                if latest_date is None or record_date > latest_date:
-                    latest_date = record_date
-                    logger.debug(f"    -> Updated to latest date: {latest_date}")
-            else:
-                logger.debug(f"  - {symbol}: no historical record")
-        
-        if latest_date:
-            logger.debug(f"\n[COMPATIBILITY_BUILD] Determined latest decision date: {latest_date}")
-            logger.debug(f"[COMPATIBILITY_BUILD] Building decision records for that date:")
-            
-            # Build previous_decisions format
-            for symbol, records in self.decision_history.items():
-                if records and records[0]["date"] == latest_date:
-                    decision = records[0]["decision"]
-                    latest_decisions[symbol] = decision
-                    logger.debug(f"  - {symbol}: add decision record")
-                    logger.debug(f"    action: {decision.get('action', 'N/A')}")
-                    logger.debug(f"    target_cash_amount: {decision.get('target_cash_amount', 'N/A')}")
-                    logger.debug(f"    confidence: {decision.get('confidence', 'N/A')}")
-                else:
-                    if records:
-                        logger.debug(f"  - {symbol}: skip, latest record date {records[0]['date']} != {latest_date}")
-                    else:
-                        logger.debug(f"  - {symbol}: skip, no historical record")
-            
-            # Add meta information
-            meta_info = {
-                "date": latest_date,
-                "calls": 1  # This might need to be obtained from actual calls
-            }
-            latest_decisions["__meta__"] = meta_info
-            logger.debug(f"\n[COMPATIBILITY_BUILD] add meta information: {meta_info}")
-            
-            logger.debug(f"\n[COMPATIBILITY_BUILD] build completed: {len(latest_decisions)-1} symbols' decision records")
-            logger.debug(f"[COMPATIBILITY_BUILD] returned previous_decisions structure:")
-            for key, value in latest_decisions.items():
-                if key != "__meta__":
-                    logger.debug(f"  - {key}: {type(value)} - {value}")
-                else:
-                    logger.debug(f"  - {key}: {type(value)} - {value}")
-        else:
-            logger.warning(f"[COMPATIBILITY_BUILD] warning: no valid decision date found")
-            latest_decisions = None
-        
-        logger.info(f"=== Backward Compatibility Build Ended ===\n")
-        return latest_decisions if latest_decisions else None
-
-
     def _build_features_for_day(self, ctx) -> List[Dict]:
         """
         Build daily features: Get historical data, news, financials, etc., and build feature list.
@@ -457,6 +75,10 @@ class Strategy:
         """
         features_list = []
         open_map = ctx["open_map"]
+        if not open_map:
+            return []
+        
+        # 1) Feature construction
         datasets = ctx["datasets"]
         portfolio = ctx["portfolio"]
         
@@ -472,7 +94,7 @@ class Strategy:
             
             bars_day = datasets.get_day_bars(symbol, start_date.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d"))
             
-            # Get news data
+            # Get news data (using ToolRegistry)
             news_items = []
             try:
                 # News fetching logic: let data_hub.py handle lookahead bias prevention
@@ -480,19 +102,30 @@ class Strategy:
                 news_end_date = end_date  # Pass decision date directly, let get_news() handle bias prevention
                 news_start_date = end_date - pd.Timedelta(days=self.news_lookback_days)  # Go back lookback days
                 
-                logger.debug(f"[DEBUG] News fetching parameter correction:")
-                logger.debug(f"[DEBUG]   Decision date: {end_date.strftime('%Y-%m-%d')}")
-                logger.debug(f"[DEBUG]   News fetching range: {news_start_date.strftime('%Y-%m-%d')} to {news_end_date.strftime('%Y-%m-%d')}")
+                logger.debug(
+                    "[DATA_FETCH] News fetching parameter",
+                    decision_date=end_date.strftime('%Y-%m-%d'),
+                    start=news_start_date.strftime('%Y-%m-%d'),
+                    end=news_end_date.strftime('%Y-%m-%d')
+                )
                 
-                news_result = data_hub.get_news(
-                    symbol, 
-                    news_start_date.strftime("%Y-%m-%d"), 
-                    news_end_date.strftime("%Y-%m-%d"),
+                # Use ToolRegistry to get news data
+                tool_registry = ToolRegistry.default()
+                news_tool_result = tool_registry.execute(
+                    "get_news",
+                    symbol=symbol,
+                    start_date=news_start_date.strftime("%Y-%m-%d"),
+                    end_date=news_end_date.strftime("%Y-%m-%d"),
                     limit=page_limit
                 )
-                if news_result is not None:
-                    news_raw, _ = news_result
+                
+                if news_tool_result.success:
+                    news_raw = news_tool_result.data
                 else:
+                    logger.debug(
+                        "[DATA_FETCH] News tool failed",
+                        error=news_tool_result.error
+                    )
                     news_raw = []
                 
                 # Handle different news data formats
@@ -508,70 +141,91 @@ class Strategy:
                 else:
                     news_items = []
                 
-                # 🚨 Time filtering logic (consistent with fetching logic)
+                # Time filtering logic (consistent with fetching logic)
                 if news_items:
                     valid_news = []
                     
-                    logger.debug(f"[DEBUG] Start time filtering - news count: {len(news_items)}")
-                    logger.debug(f"[DEBUG] Using time range consistent with fetching: {news_start_date.strftime('%Y-%m-%d')} to {news_end_date.strftime('%Y-%m-%d')}")
+                    logger.debug(
+                        "[DATA_VALIDATE] Start time filtering",
+                        news_count=len(news_items),
+                        range_start=news_start_date.strftime('%Y-%m-%d'),
+                        range_end=news_end_date.strftime('%Y-%m-%d')
+                    )
                     
                     for i, news in enumerate(news_items):
                         if not isinstance(news, dict):
-                            logger.debug(f"[DEBUG] News #{i}: skip - not dictionary type")
+                            logger.debug(f"[DATA_VALIDATE] News #{i}: skip - not dictionary type")
                             continue
                             
                         news_time_str = news.get("published_utc") or news.get("published_date")
                         if not news_time_str:
-                            logger.debug(f"[DEBUG] News #{i}: skip - no time field")
+                            logger.debug(f"[DATA_VALIDATE] News #{i}: skip - no time field")
                             continue
                             
                         try:
                             news_time = pd.to_datetime(news_time_str, utc=True, errors="coerce")
                             if pd.isna(news_time):
-                                logger.debug(f"[DEBUG] News #{i}: skip - time parsing failed: {news_time_str}")
+                                logger.debug(f"[DATA_VALIDATE] News #{i}: skip - time parsing failed: {news_time_str}")
                                 continue
                                 
                             from stockbench.core.data_hub import _normalize_timestamp_for_comparison
                             news_time_naive = _normalize_timestamp_for_comparison(news_time)
                             filter_start_naive = _normalize_timestamp_for_comparison(news_start_date)
-                            # 🚨 Fix: Let news_end_date include the entire day, not just midnight
+                            # Fix: Let news_end_date include the entire day, not just midnight
                             # Set end date to 23:59:59 of that day
                             news_end_date_eod = news_end_date.replace(hour=23, minute=59, second=59, microsecond=999999)
                             filter_end_naive = _normalize_timestamp_for_comparison(news_end_date_eod)
                             
-                            logger.debug(f"[DEBUG] News #{i}: time comparison - news:{news_time_naive.strftime('%Y-%m-%d %H:%M')}, range:{filter_start_naive.strftime('%Y-%m-%d')} to {news_end_date.strftime('%Y-%m-%d')} 23:59")
+                            logger.debug(f"[DATA_VALIDATE] News #{i}: time comparison - news:{news_time_naive.strftime('%Y-%m-%d %H:%M')}, range:{filter_start_naive.strftime('%Y-%m-%d')} to {news_end_date.strftime('%Y-%m-%d')} 23:59")
                             
                             if filter_start_naive <= news_time_naive <= filter_end_naive:
                                 valid_news.append(news)
-                                logger.debug(f"[DEBUG] News #{i}: ✅ Passed time filtering")
+                                logger.debug(f"[DATA_VALIDATE] News #{i}: Passed time filtering")
                             else:
-                                logger.debug(f"[DEBUG] News #{i}: ❌ Time out of range")
+                                logger.debug(f"[DATA_VALIDATE] News #{i}: Time out of range")
                         except Exception as e:
-                            logger.debug(f"[DEBUG] News #{i}: Time processing exception: {e}")
+                            logger.debug(f"[DATA_VALIDATE] News #{i}: Time processing exception: {e}")
                             continue
                     
                     news_items = valid_news
-                    logger.debug(f"[DEBUG] Time filtering completed - remaining news count: {len(news_items)}")
+                    logger.debug(f"[DATA_VALIDATE] Time filtering completed - remaining news count: {len(news_items)}")
                         
             except Exception as e:
                 # Failed to get news
                 import traceback
                 traceback.print_exc()
             
-            # Get financial data
+            # Get financial data (using ToolRegistry)
             financials = []
             try:
-                financials = data_hub.get_financials(symbol)
+                tool_registry = ToolRegistry.default()
+                financials_result = tool_registry.execute("get_financials", symbol=symbol)
+                if financials_result.success:
+                    financials = financials_result.data
+                else:
+                    logger.debug(
+                        "[DATA_FETCH] Financials tool failed",
+                        error=financials_result.error
+                    )
             except Exception as e:
                 # Failed to get financial data
                 pass
             
-            # Get dividend and split data
+            # Get dividend and split data (using ToolRegistry)
             dividends = pd.DataFrame()
             splits = pd.DataFrame()
             try:
-                dividends = data_hub.get_dividends(symbol)
-                splits = data_hub.get_splits(symbol)
+                tool_registry = ToolRegistry.default()
+                
+                # Get dividends via ToolRegistry
+                dividends_result = tool_registry.execute("get_dividends", symbol=symbol)
+                if dividends_result.success and dividends_result.data:
+                    dividends = pd.DataFrame(dividends_result.data) if isinstance(dividends_result.data, list) else dividends_result.data
+                
+                # Get splits via ToolRegistry
+                splits_result = tool_registry.execute("get_splits", symbol=symbol)
+                if splits_result.success and splits_result.data:
+                    splits = pd.DataFrame(splits_result.data) if isinstance(splits_result.data, list) else splits_result.data
             except Exception as e:
                 # Failed to get dividend/split data
                 pass
@@ -602,12 +256,14 @@ class Strategy:
                     if ctx:
                         open_map_keys = list(ctx.get("open_map", {}).keys())
                         open_price_map_keys = list(ctx.get("open_price_map", {}).keys())
-                        logger.debug(f"[POSITION_VALUE_DEBUG] {symbol}: ctx.open_map has {len(open_map_keys)} stocks: {open_map_keys[:5]}")
-                        logger.debug(f"[POSITION_VALUE_DEBUG] {symbol}: ctx.open_price_map has {len(open_price_map_keys)} stocks: {open_price_map_keys[:5]}")
-                        if symbol in ctx.get("open_map", {}):
-                            logger.debug(f"[POSITION_VALUE_DEBUG] {symbol}: found price in open_map = {ctx['open_map'][symbol]}")
-                        if symbol in ctx.get("open_price_map", {}):
-                            logger.debug(f"[POSITION_VALUE_DEBUG] {symbol}: found price in open_price_map = {ctx['open_price_map'][symbol]}")
+                        logger.debug(
+                            "[BT_POSITION] Price data availability",
+                            symbol=symbol,
+                            open_map_count=len(open_map_keys),
+                            open_price_map_count=len(open_price_map_keys),
+                            in_open_map=symbol in ctx.get("open_map", {}),
+                            in_open_price_map=symbol in ctx.get("open_price_map", {})
+                        )
                     
                     current_position_value = calculate_position_value(
                         symbol=symbol,
@@ -620,15 +276,28 @@ class Strategy:
                     # If unified tool also fails, use original fallback logic
                     if current_position_value == 0.0 and fallback_price and fallback_price > 0:
                         current_position_value = float(position.shares * fallback_price)
-                        logger.info(f"[POSITION_VALUE] {symbol}: {position.shares:.2f} shares × {fallback_price:.4f} (final_fallback) = {current_position_value:.2f}")
+                        logger.debug(
+                            "[BT_POSITION] Position value calculated",
+                            symbol=symbol,
+                            shares=round(position.shares, 2),
+                            price=round(fallback_price, 4),
+                            value=round(current_position_value, 2),
+                            method="final_fallback"
+                        )
                         
                 except Exception as e:
                     current_position_value = 0.0
-                    logger.warning(f"[POSITION_VALUE] {symbol}: Failed to calculate position value: {e}")
+                    logger.warning(
+                        "[BT_POSITION] Failed to calculate position value",
+                        symbol=symbol,
+                        error=str(e)
+                    )
                     # Print more detailed error information
-                    logger.warning(f"[POSITION_VALUE_DEBUG] {symbol}: ctx keys = {list(ctx.keys()) if ctx else 'None'}")
-                    import traceback
-                    logger.warning(f"[POSITION_VALUE_DEBUG] {symbol}: detailed error = {traceback.format_exc()}")
+                    logger.warning(
+                        "[BT_POSITION_DEBUG] Detailed error",
+                        symbol=symbol,
+                        error=str(e)
+                    )
             
             # If no position object, create a default position state
             if position is None:
@@ -736,40 +405,15 @@ class Strategy:
         # 1) Feature construction
         features_list = self._build_features_for_day(ctx)
         
-        # 2) Clean up expired historical records
+        # 2) Get current date for logging and context
         current_date = ctx["date"].strftime("%Y-%m-%d")
-        self._cleanup_old_history(current_date)
+        logger.debug(f"[AGENT_EXECUTOR] Current date: {current_date}")
         
-        # 3) Build historical decision records for LLM call
-        # Get current symbol list
-        current_symbols = [fi["symbol"] for fi in features_list]
-        
-        # For backward compatibility, build previous_decisions format
-        self.previous_decisions = self._build_previous_decisions_for_compatibility(current_date)
-        
-        # Get long-term historical records for prompt construction
-        decision_history = self._get_decision_history_for_prompt(current_symbols)
-        
-        # Add detailed logs for historical records
-        logger.debug(f"[DEBUG] LLM Strategy: current_date={current_date}")
-        logger.debug(f"[DEBUG] LLM Strategy: long-term historical record statistics: total {len(self.decision_history)} symbols have historical records")
-        for symbol, records in self.decision_history.items():
-            if symbol in current_symbols:
-                logger.debug(f"[DEBUG] LLM Strategy: {symbol} has {len(records)} historical records")
-                if records:
-                    latest_record = records[0]
-                    logger.debug(f"[DEBUG] LLM Strategy: {symbol} latest record - date={latest_record['date']}, action={latest_record['decision'].get('action', 'unknown')}")
-        
-        # 4) Use unified executor for decision-making (automatically route to single or dual Agent mode based on configuration)
+        # 3) Use unified executor for decision-making (automatically route to single or dual Agent mode based on configuration)
         logger.info(f"\n=== Unified Executor Decision Call Started ===")
-        logger.info(f"[UNIFIED_EXECUTOR] Using unified executor for decision-making, Agent mode: {self.agent_mode}")
-        logger.info(f"[UNIFIED_EXECUTOR] Agent mode in configuration: {(self.cfg or {}).get('agents', {}).get('mode', 'single')}")
-        logger.info(f"[UNIFIED_EXECUTOR] Passed historical record parameters:")
-        logger.debug(f"  - previous_decisions: {type(self.previous_decisions)} - {self.previous_decisions}")
-        logger.debug(f"  - decision_history: {type(decision_history)} - {len(decision_history) if decision_history else 0} symbols")
-        if decision_history:
-            for symbol, records in decision_history.items():
-                logger.debug(f"    {symbol}: {len(records)} records")
+        logger.info(f"[AGENT_EXECUTOR] Using unified executor for decision-making, Agent mode: {self.agent_mode}")
+        logger.info(f"[AGENT_EXECUTOR] Agent mode in configuration: {(self.cfg or {}).get('agents', {}).get('mode', 'single')}")
+        logger.info(f"[AGENT_EXECUTOR] Memory system: Agents will use ctx.memory.episodes for history")
         
         # Build bars_data for feature conversion (complete version, including all data needed for dual-agent mode)
         bars_data = {}
@@ -821,17 +465,57 @@ class Strategy:
                     current_position_value = 0.0
                     if position and hasattr(position, "shares") and position.shares:
                         from stockbench.core.price_utils import calculate_position_value
+                        
+                        # Prepare fallback price
+                        fallback_price = ref_price or (bars_day["close"].iloc[-1] if not bars_day.empty and "close" in bars_day.columns else 100.0)
+                        
                         try:
+                            # Print debug info: check price data in ctx
+                            if ctx:
+                                open_map_keys = list(ctx.get("open_map", {}).keys())
+                                open_price_map_keys = list(ctx.get("open_price_map", {}).keys())
+                                logger.debug(
+                                    "[BT_POSITION] Price data availability",
+                                    symbol=symbol,
+                                    open_map_count=len(open_map_keys),
+                                    open_price_map_count=len(open_price_map_keys),
+                                    in_open_map=symbol in ctx.get("open_map", {}),
+                                    in_open_price_map=symbol in ctx.get("open_price_map", {})
+                                )
+                            
                             current_position_value = calculate_position_value(
                                 symbol=symbol,
                                 shares=position.shares,
                                 ctx=ctx,
-                                portfolio=None,
+                                portfolio=None,  # No portfolio object here
                                 position_avg_price=getattr(position, 'avg_price', None)
                             )
-                        except Exception:
-                            fallback_price = ref_price or 100.0
-                            current_position_value = float(position.shares * fallback_price)
+                            
+                            # If unified tool also fails, use original fallback logic
+                            if current_position_value == 0.0 and fallback_price and fallback_price > 0:
+                                current_position_value = float(position.shares * fallback_price)
+                                logger.debug(
+                                    "[BT_POSITION] Position value calculated",
+                                    symbol=symbol,
+                                    shares=round(position.shares, 2),
+                                    price=round(fallback_price, 4),
+                                    value=round(current_position_value, 2),
+                                    method="final_fallback"
+                                )
+                                
+                        except Exception as e:
+                            current_position_value = 0.0
+                            logger.warning(
+                                "[BT_POSITION] Failed to calculate position value",
+                                symbol=symbol,
+                                error=str(e)
+                            )
+                            # Print more detailed error information
+                            logger.warning(
+                                "[BT_POSITION_DEBUG] Detailed error",
+                                symbol=symbol,
+                                error=str(e)
+                            )
                     
                     holding_days = int(getattr(position, "holding_days", 0) or 0) if position else 0
                     position_state = {
@@ -860,23 +544,68 @@ class Strategy:
         # Extract rejected_orders from ctx for retry mechanism
         rejected_orders = ctx.get("rejected_orders", None)
         
-        logger.info(f"[UNIFIED_EXECUTOR] Calling unified executor decision, automatically routing to correct Agent mode")
-        logger.info(f"[UNIFIED_EXECUTOR] Parameter details:")
-        logger.debug(f"  - features_list length: {len(features_list)}")
-        logger.debug(f"  - cfg: {type(self.cfg)}")
-        logger.debug(f"  - enable_llm: {True}")
-        logger.debug(f"  - run_id: {run_id}")
-        logger.debug(f"  - previous_decisions: {'Yes' if self.previous_decisions else 'No'}")
-        logger.debug(f"  - decision_history: {'Yes' if decision_history else 'No'}")
-        logger.debug(f"  - rejected_orders: {len(rejected_orders) if rejected_orders else 0} orders")
+        # === Part 2: Create PipelineContext for unified data flow and tracing ===
+        pipeline_ctx = PipelineContext(
+            run_id=run_id or "unknown",
+            date=ctx["date"],
+            llm_client=None,  # Will be created by agents as needed
+            llm_config=None,
+            config=self.cfg
+        )
         
-        if rejected_orders:
-            logger.info(f"[UNIFIED_EXECUTOR] Processing {len(rejected_orders)} rejected orders for retry")
+        # Store data in pipeline context for agents to access
+        pipeline_ctx.put("portfolio", ctx["portfolio"], agent_name="strategy")
+        pipeline_ctx.put("bars_data", bars_data, agent_name="strategy")
+        pipeline_ctx.put("rejected_orders", rejected_orders, agent_name="strategy")
+        pipeline_ctx.put("features_list", features_list, agent_name="strategy")
         
-        decisions_map = unified_decide_batch(features_list, cfg=self.cfg, enable_llm=True, bars_data=bars_data, run_id=run_id, previous_decisions=self.previous_decisions, decision_history=decision_history, rejected_orders=rejected_orders, ctx=ctx)
+        logger.info(
+            "[AGENT_EXECUTOR] Calling unified executor",
+            agent_mode=self.agent_mode,
+            features_count=len(features_list),
+            run_id=run_id,
+            rejected_orders=len(rejected_orders) if rejected_orders else 0
+        )
         
-        logger.info(f"[UNIFIED_EXECUTOR] Unified executor decision completed, return result type: {type(decisions_map)}")
-        logger.info(f"[UNIFIED_EXECUTOR] Return result keys: {list(decisions_map.keys()) if decisions_map else 'None'}")
+        # Call unified executor to get decisions
+        # Note: The new Memory system (ctx.memory.episodes) will handle history automatically in agents
+        decisions_map = unified_decide_batch(
+            features_list, 
+            cfg=self.cfg, 
+            enable_llm=True, 
+            bars_data=bars_data, 
+            run_id=run_id, 
+            rejected_orders=rejected_orders, 
+            ctx=pipeline_ctx  # Use PipelineContext with integrated Memory system
+        )
+        
+        logger.info(
+            "[AGENT_EXECUTOR] Unified executor completed",
+            result_type=type(decisions_map).__name__,
+            decision_count=len(decisions_map) if decisions_map else 0
+        )
+        
+        # === Part 2: Output execution trace summary ===
+        trace_summary = pipeline_ctx.trace.to_summary()
+        logger.info(
+            "[AGENT_EXEC] Execution summary",
+            total_agents=trace_summary['total_agents'],
+            success=trace_summary['success'],
+            failed=trace_summary['failed'],
+            duration_ms=round(trace_summary['total_duration_ms'], 1)
+        )
+        
+        # Log failed agents if any
+        failed_agents = pipeline_ctx.get_failed_agents()
+        if failed_agents:
+            logger.warning(
+                "[AGENT_ERROR] Failed agents detected",
+                failed_agents=failed_agents
+            )
+        
+        # Store trace in ctx for later retrieval (e.g., for reports)
+        ctx["pipeline_trace"] = trace_summary
+        
         logger.info(f"=== Unified Executor Decision Call Ended ===\n")
         
         # Note: Order rejection retry logic has been removed, unified retry mechanism will handle automatically
@@ -888,8 +617,13 @@ class Strategy:
         equity_for_sizing = float(ctx.get("equity_for_sizing") or 0.0)
         
         # Add debug logs
-        logger.debug(f"[DEBUG] LLM Strategy: equity_for_sizing={equity_for_sizing}, portfolio.equity={pf.equity}")
-        logger.debug(f"[DEBUG] LLM Strategy: feature_count={len(features_list)}, decision_count={len(decisions_map)}")
+        logger.debug(
+            "[BT_ENGINE] Portfolio state",
+            equity_for_sizing=equity_for_sizing,
+            portfolio_equity=pf.equity,
+            feature_count=len(features_list),
+            decision_count=len(decisions_map)
+        )
         
         for fi in features_list:
             s = fi["symbol"]
@@ -991,94 +725,28 @@ class Strategy:
         return orders 
 
     def record_executed_decisions(self, executed_symbols: List[str], portfolio=None) -> None:
-        """Record decisions using intelligent recording strategy
+        """Clear pending decisions after execution.
         
-        Strategy:
-        1. Hold decisions: Record all (hold never gets rejected)
-        2. Buy/sell decisions: Only record successfully executed ones
+        Note: Decision recording is now handled automatically by the new Memory system (ctx.memory.episodes)
+        in the Agent layer. This method only clears the pending state.
         
         Args:
             executed_symbols: List of symbols that were successfully executed
-            portfolio: Portfolio object to get current shares information
+            portfolio: Portfolio object (kept for backward compatibility but not used)
         """
         if not self.pending_decisions:
-            logger.debug(f"[DELAYED_RECORD] No pending decisions, skipping recording")
+            logger.debug(f"[RECORD] No pending decisions, skipping")
             return
             
-        logger.info(f"\n=== Intelligent Decision Recording Started ===")
-        logger.info(f"[SMART_RECORD] Implementing intelligent recording strategy:")
-        logger.info(f"[SMART_RECORD] - Hold decisions: Record ALL (never get rejected)")
-        logger.info(f"[SMART_RECORD] - Buy/sell decisions: Only record successfully executed ones")
-        logger.info(f"[SMART_RECORD] Successfully executed symbols: {executed_symbols}")
-        logger.info(f"[SMART_RECORD] Pending decision symbols: {list(self.pending_decisions.keys())}")
-        
-        # Use override mechanism: clear existing records for this date first to avoid duplicates
-        current_date = self.pending_meta.get("date", "unknown")
-        logger.info(f"[SMART_RECORD] Using override mechanism for date: {current_date}")
-        
-        # Intelligent recording strategy
-        final_decisions = {}
-        hold_count = 0
-        executed_count = 0
-        skipped_count = 0
-        
-        for symbol, decision in self.pending_decisions.items():
-            if symbol.startswith("__"):  # Skip meta fields
-                continue
-                
-            action = decision.get("action", "hold").lower()
-            
-            # Add current shares information from portfolio (after execution)
-            if portfolio and hasattr(portfolio, 'positions'):
-                position = portfolio.positions.get(symbol)
-                if position and hasattr(position, 'shares'):
-                    decision["shares"] = round(float(position.shares), 2)
-                    logger.debug(f"[SMART_RECORD] {symbol}: Adding shares info: {decision['shares']}")
-                else:
-                    decision["shares"] = 0.0
-                    logger.debug(f"[SMART_RECORD] {symbol}: No position, shares set to 0")
-            else:
-                logger.warning(f"[SMART_RECORD] {symbol}: No portfolio provided, cannot record shares")
-                decision["shares"] = 0.0
-            
-            if action == "hold":
-                # Strategy 1: Record all hold decisions (hold never gets rejected)
-                final_decisions[symbol] = decision
-                hold_count += 1
-                logger.debug(f"[SMART_RECORD] {symbol}: HOLD decision recorded (hold decisions always recorded)")
-            elif symbol in executed_symbols:
-                # Strategy 2: Only record successfully executed buy/sell decisions
-                final_decisions[symbol] = decision
-                executed_count += 1
-                logger.debug(f"[SMART_RECORD] {symbol}: {action.upper()} decision recorded (successfully executed)")
-            else:
-                # Buy/sell decision that was not executed (probably rejected) - skip recording
-                skipped_count += 1
-                logger.debug(f"[SMART_RECORD] {symbol}: {action.upper()} decision NOT recorded (not executed, likely rejected)")
-        
-        # Copy meta information
-        if "__meta__" in self.pending_decisions:
-            final_decisions["__meta__"] = self.pending_decisions["__meta__"]
-        
-        # Record final decisions with override mechanism
-        if final_decisions:
-            logger.info(f"\n[SMART_RECORD] Recording summary:")
-            logger.info(f"  - Hold decisions recorded: {hold_count}")
-            logger.info(f"  - Executed buy/sell decisions recorded: {executed_count}")
-            logger.info(f"  - Rejected buy/sell decisions skipped: {skipped_count}")
-            logger.info(f"  - Total decisions to record: {len([k for k in final_decisions.keys() if not k.startswith('__')])}")
-            
-            # Use override mechanism to ensure clean recording
-            self._add_decision_to_history(
-                current_date, 
-                final_decisions, 
-                self.pending_meta,
-                clear_date_first=True  # Override mechanism: clear existing records for this date first
-            )
-        else:
-            logger.debug(f"[SMART_RECORD] No decisions meet the recording criteria")
+        logger.info(f"\n=== Decision Recording (New Memory System) ===")
+        logger.info(f"[RECORD] Decisions have been saved to ctx.memory.episodes by Agents automatically")
+        logger.info(f"[RECORD] Clearing pending decisions state")
+        logger.debug(f"[RECORD] Executed symbols: {executed_symbols}")
+        logger.debug(f"[RECORD] Pending symbols: {list(self.pending_decisions.keys())}")
         
         # Clear pending decisions
         self.pending_decisions = {}
         self.pending_meta = {}
-        logger.info(f"=== Intelligent Decision Recording Completed ===\n")
+        self.pending_date = ""
+        
+        logger.info(f"=== Decision Recording Completed ===\n")

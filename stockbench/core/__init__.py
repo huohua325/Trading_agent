@@ -70,6 +70,32 @@ from .executor import (
     decide_batch
 )
 
+# Pipeline context and agent tracing (Part 2 upgrade)
+from .pipeline_context import (
+    PipelineContext,
+    AgentTrace,
+    AgentStep,
+)
+
+# Agent decorators
+from .decorators import traced_agent
+
+# Type definitions
+from .types import (
+    Decision,
+    FilterResult,
+    AgentResult,
+    PipelineSummary,
+)
+
+# Message system (for Agent-LLM communication and Memory)
+from .message import (
+    Message,
+    MessageRole,
+    messages_to_api_format,
+    messages_from_api_format,
+)
+
 # Price utilities and validation
 from .price_utils import (
     get_unified_price,
@@ -126,4 +152,21 @@ __all__ = [
     'add_price_fallback_mechanism',
     'validate_price_data_consistency',
     
-] 
+    # Pipeline context and tracing (Part 2)
+    'PipelineContext',
+    'AgentTrace',
+    'AgentStep',
+    'traced_agent',
+    
+    # Type definitions (Part 2)
+    'Decision',
+    'FilterResult',
+    'AgentResult',
+    'PipelineSummary',
+    
+    # Message system (Memory foundation)
+    'Message',
+    'MessageRole',
+    'messages_to_api_format',
+    'messages_from_api_format',
+]

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Dict, List, Set, Optional
 from collections import Counter
-import logging
+from loguru import logger
 
 import math
 import numpy as np
@@ -17,8 +17,6 @@ except ImportError:
     NewsSnapshot = Any
     PositionState = Any
 
-# Set up logger
-logger = logging.getLogger(__name__)
 
 def _compute_stock_indicators(ticker: str, date: str, current_price: float) -> Dict[str, float]:
     """Calculate key stock indicator features
@@ -32,10 +30,7 @@ def _compute_stock_indicators(ticker: str, date: str, current_price: float) -> D
         Dict containing normalized stock indicator features
     """
     from . import data_hub
-    import logging
     import math
-    
-    logger = logging.getLogger(__name__)
     
     out: Dict[str, float] = {
         "market_cap": 0.0,               # Market cap (USD)
@@ -48,9 +43,7 @@ def _compute_stock_indicators(ticker: str, date: str, current_price: float) -> D
     
     try:
         # Get stock indicator data
-        logger.info(f"📊 [FUNDAMENTAL_DATA] Getting stock indicators for {ticker} on {date}")
         indicators = data_hub.get_stock_indicators(ticker, date)
-        logger.info(f"📊 [FUNDAMENTAL_DATA] Retrieved {len(indicators) if indicators else 0} indicators: {list(indicators.keys()) if indicators else 'None'}")
         
         # 1. Use raw market cap directly
         market_cap = indicators.get("market_cap", 0)
@@ -81,14 +74,21 @@ def _compute_stock_indicators(ticker: str, date: str, current_price: float) -> D
         if quarterly_dividend > 0:
             out["quarterly_dividend"] = float(quarterly_dividend)
         
-        logger.info(f"✅ [FUNDAMENTAL_DATA] Stock indicators computed for {ticker}: market_cap={out['market_cap']}, pe_ratio={out['pe_ratio']:.2f}, quarterly_dividend={out.get('quarterly_dividend', 0)}")
+        logger.debug(
+            "[FEATURE_FUND] Stock indicators computed",
+            ticker=ticker,
+            market_cap=out['market_cap'],
+            pe_ratio=round(out['pe_ratio'], 2)
+        )
         
     except Exception as e:
-        logger.error(f"❌ [FUNDAMENTAL_DATA] Failed to compute stock indicators for {ticker}: {e}")
+        logger.warning(
+            "[FEATURE_FUND] Failed to compute stock indicators",
+            ticker=ticker,
+            error=str(e)
+        )
     
-    final_result = out
-    logger.info(f"🔄 [FUNDAMENTAL_DATA] Returning fundamental data for {ticker}: {final_result}")
-    return final_result
+    return out
 
 
 def build_features_for_prompt(
@@ -133,56 +133,14 @@ def build_features_for_prompt(
     # Check if debug output is enabled
     enable_debug = config.get("backtest", {}).get("enable_detailed_logging", False) if config else False
     
-    # Add logger
-    import logging
-    logger = logging.getLogger(__name__)
-    
-    # Start logging
-    logger.info(f"🌟 [FUNDAMENTAL_DATA] build_features_for_prompt called")
-    
-    if enable_debug:
-        logger.debug(f"\n=== build_features_for_prompt function called ===")
-        logger.debug(f"Asset details: {details} (type: {type(details)})")
-        logger.debug(f"Snapshot data: {snapshot} (type: {type(snapshot)})")
-        logger.debug(f"Position state: {position_state} (type: {type(position_state)})")
-        logger.debug(f"News count: {len(news_items) if news_items else 0}")
-        logger.debug(f"Daily data length: {len(bars_day) if not bars_day.empty else 0}")
-        logger.debug(f"Include price: {include_price}")
-    
-    # Log detailed key input parameters
-    logger.info(f"🔍 [FUNDAMENTAL_DATA] Input parameters analysis:")
-    logger.info(f"  - details: {details} (type: {type(details)})")
-    logger.info(f"  - snapshot: {snapshot} (type: {type(snapshot)})")
-    logger.info(f"  - position_state: {position_state} (type: {type(position_state)})")
-    logger.info(f"  - bars_day empty: {bars_day.empty if hasattr(bars_day, 'empty') else 'N/A'}")
-    logger.info(f"  - include_price: {include_price}")
-    
     # Parameter validation
-    if position_state is None:
-        if enable_debug:
-            logger.debug("Warning: position_state is None, will use default values")
-        position_state = {}
-    elif not isinstance(position_state, dict):
-        if enable_debug:
-            logger.debug(f"Warning: position_state is not dict type, but {type(position_state)}, will use default values")
+    if position_state is None or not isinstance(position_state, dict):
         position_state = {}
     
-    if details is None:
-        if enable_debug:
-            logger.debug("Warning: details is None, will use default values")
-        details = {}
-    elif not isinstance(details, dict):
-        if enable_debug:
-            logger.debug(f"Warning: details is not dict type, but {type(details)}, will use default values")
+    if details is None or not isinstance(details, dict):
         details = {}
     
-    if snapshot is None:
-        if enable_debug:
-            logger.debug("Warning: snapshot is None, will use default values")
-        snapshot = {}
-    elif not isinstance(snapshot, dict):
-        if enable_debug:
-            logger.debug(f"Warning: snapshot is not dict type, but {type(snapshot)}, will use default values")
+    if snapshot is None or not isinstance(snapshot, dict):
         snapshot = {}
     
     try:
@@ -199,8 +157,6 @@ def build_features_for_prompt(
         news_top_k = config.get("news", {}).get("top_k_event_count", 5)
         
         # Only support daily mode
-        if enable_debug:
-            logger.debug("Only support daily data processing")
         
         # Unify and sort data
         day_df = bars_day.copy() if isinstance(bars_day, pd.DataFrame) else pd.DataFrame([])
@@ -212,43 +168,30 @@ def build_features_for_prompt(
         symbol = (details.get("ticker") if isinstance(details, dict) else None) or \
                  (snapshot.get("symbol") if isinstance(snapshot, dict) else None) or "UNKNOWN"
         
-        logger.info(f"🎯 [FUNDAMENTAL_DATA] Symbol determination:")
-        logger.info(f"  - details.get('ticker'): {details.get('ticker') if isinstance(details, dict) else 'N/A'}")
-        logger.info(f"  - snapshot.get('symbol'): {snapshot.get('symbol') if isinstance(snapshot, dict) else 'N/A'}")
-        logger.info(f"  - final symbol: {symbol}")
-        
         # Get current price - used for internal calculations (such as fundamental data), not affected by include_price
         current_price = None
-        logger.info(f"💰 [FUNDAMENTAL_DATA] Current price determination for internal calculations:")
-        # Note: No longer limited by include_price here, because fundamental data calculation requires price
         try:
             # 1. Prioritize using price from snapshot
             if isinstance(snapshot, dict) and snapshot.get("price"):
                 price_val = snapshot["price"]
-                logger.info(f"  - Found price in snapshot: {price_val} (type: {type(price_val)})")
-                logger.debug(f"Get price from snapshot: {price_val} (type: {type(price_val)})")
                 current_price = float(price_val) if price_val is not None else None
                 
             # 2. If no snapshot price, use current day's opening price (backtesting scenario)
             elif not day_df.empty and "open" in day_df.columns:
                 price_val = day_df["open"].iloc[-1]  # Opening price of the latest day
-                logger.info(f"  - Using day_df open price: {price_val} (type: {type(price_val)})")
-                logger.debug(f"Get current price from daily opening price: {price_val} (type: {type(price_val)})")
                 current_price = float(price_val) if price_val is not None else None
                 
             # 3. Last fallback: use previous day's closing price
             elif not day_df.empty and "close" in day_df.columns:
                 price_val = day_df["close"].iloc[-1]
-                logger.info(f"  - Using day_df close price: {price_val} (type: {type(price_val)})")
-                logger.debug(f"Get price from daily closing price: {price_val} (type: {type(price_val)})")
                 current_price = float(price_val) if price_val is not None else None
-            else:
-                logger.warning(f"  - No price source available!")
-                
-            logger.info(f"  - Final current_price for internal use: {current_price} (type: {type(current_price)})")
-            logger.debug(f"Final current price (for internal calculations): {current_price} (type: {type(current_price)})")
         except (ValueError, TypeError) as e:
-            logger.error(f"  - Error getting current price: {e}")
+            if enable_debug:
+                logger.warning(
+                    "[FEATURE_BUILD] Error getting current price",
+                    symbol=symbol,
+                    error=str(e)
+                )
             current_price = None
         
         # Build price series - fix duplicate data issue

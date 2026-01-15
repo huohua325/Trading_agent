@@ -5,15 +5,26 @@ import time
 import json
 import re
 from dataclasses import dataclass
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple, List, TYPE_CHECKING
 from datetime import datetime, timedelta
-from zai import ZhipuAiClient
 import httpx
+
+# Optional: ZhipuAI SDK
+try:
+    from zai import ZhipuAiClient
+    HAS_ZAI = True
+except ImportError:
+    ZhipuAiClient = None
+    HAS_ZAI = False
+
 from loguru import logger
 import openai  # Add OpenAI official client
 
 from stockbench.utils.io import ensure_dir, sha256_text, canonical_json, atomic_append_jsonl
 from stockbench.utils.logging_helper import get_llm_logger
+
+if TYPE_CHECKING:
+    from stockbench.core.message import Message
 
 # Try to import JSON repair tools, use built-in methods if not installed
 try:
@@ -27,6 +38,65 @@ try:
     HAS_DEMJSON = True
 except ImportError:
     HAS_DEMJSON = False
+
+
+# ==================== 提供商常量 ====================
+class LLMProvider:
+    """LLM 提供商常量"""
+    OPENAI = "openai"
+    ZHIPUAI = "zhipuai"
+    VLLM = "vllm"
+    OLLAMA = "ollama"
+    MODELSCOPE = "modelscope"
+    LOCAL = "local"
+    AUTO = "auto"
+
+
+PROVIDER_DEFAULTS = {
+    LLMProvider.OPENAI: {
+        "base_url": "https://api.openai.com/v1",
+        "model": "gpt-4o-mini",
+        "env_key": "OPENAI_API_KEY",
+        "auth_required": True,
+    },
+    LLMProvider.ZHIPUAI: {
+        "base_url": "https://open.bigmodel.cn/api/paas/v4",
+        "model": "glm-4-flash",
+        "env_key": "ZHIPUAI_API_KEY",
+        "auth_required": True,
+    },
+    LLMProvider.VLLM: {
+        "base_url": "http://localhost:8000/v1",
+        "model": "Qwen/Qwen2.5-7B-Instruct",
+        "env_key": None,
+        "auth_required": False,
+    },
+    LLMProvider.OLLAMA: {
+        "base_url": "http://localhost:11434/v1",
+        "model": "llama3",
+        "env_key": None,
+        "auth_required": False,
+    },
+    LLMProvider.MODELSCOPE: {
+        "base_url": "https://api-inference.modelscope.cn/v1/",
+        "model": "Qwen/Qwen2.5-72B-Instruct",
+        "env_key": "MODELSCOPE_API_KEY",
+        "auth_required": True,
+    },
+}
+
+
+def _auto_detect_provider() -> str:
+    """自动检测可用的 LLM 提供商"""
+    import os
+    if os.getenv("OPENAI_API_KEY"):
+        return LLMProvider.OPENAI
+    if os.getenv("ZHIPUAI_API_KEY"):
+        return LLMProvider.ZHIPUAI
+    if os.getenv("MODELSCOPE_API_KEY"):
+        return LLMProvider.MODELSCOPE
+    # 默认尝试本地 vLLM
+    return LLMProvider.VLLM
 
 
 @dataclass
@@ -1171,6 +1241,140 @@ class LLMClient:
         
         self.llm_logger.error(f"❌ {role} failed - Reason: max_retries_exceeded")
         return None, {**meta, "reason": "max_retries_exceeded"} 
+
+    def generate_json_v2(
+        self,
+        role: str,
+        cfg: LLMConfig,
+        messages: List['Message'],
+        trade_date: str = None,
+        run_id: Optional[str] = None,
+        retry_attempt: int = 0
+    ) -> Tuple[Optional[Dict[str, Any]], Dict[str, Any], Optional['Message']]:
+        """
+        使用 Message 对象列表调用 LLM（新版 API）
+        
+        Args:
+            role: Agent 角色名称
+            cfg: LLM 配置
+            messages: Message 对象列表
+            trade_date: 交易日期
+            run_id: 运行 ID
+            retry_attempt: 重试次数
+            
+        Returns:
+            (parsed_json, meta, assistant_message)
+        """
+        from stockbench.core.message import Message, messages_to_api_format
+        
+        system_prompt = ""
+        user_prompt = ""
+        for msg in messages:
+            if msg.role == "system":
+                system_prompt = msg.content
+            elif msg.role == "user":
+                user_prompt = msg.content
+        
+        api_messages = messages_to_api_format(messages)
+        meta = {"role": role, "cached": False, "latency_ms": 0, "usage": {}}
+        
+        self.llm_logger.info(f"🤖 {role} [v2] - Model: {cfg.model}, Messages: {len(messages)}")
+        
+        cache_read = cfg.cache_read_enabled if cfg.cache_read_enabled is not None else cfg.cache_enabled
+        if cache_read and self.cache_dir:
+            cache_key = self._make_cache_key_with_date(role, cfg, system_prompt, user_prompt, trade_date, retry_attempt)
+            cached = self.get_cached_payload(cache_key, run_id, role)
+            if cached:
+                meta["cached"] = True
+                self.llm_logger.info(f"💾 Cache hit - {role}")
+                content = cached.get("raw_content", "") if "raw_content" in cached else json.dumps(cached, ensure_ascii=False)
+                assistant_msg = Message.assistant(content).with_metadata(role=role, trade_date=trade_date, run_id=run_id, model=cfg.model, cached=True)
+                return cached, meta, assistant_msg
+        
+        provider = (cfg.provider or "openai-compatible").lower()
+        headers: Dict[str, str] = {"Content-Type": "application/json"}
+        need_auth = cfg.auth_required if cfg.auth_required is not None else (provider not in {"vllm", "openai-compatible-no-auth"})
+        if need_auth:
+            effective_api_key = os.getenv("ZHIPUAI_API_KEY") if provider == "zhipuai" else self.api_key
+            if effective_api_key:
+                headers["Authorization"] = f"Bearer {effective_api_key}"
+            else:
+                return None, {**meta, "reason": "no_api_key"}, None
+        
+        body = {"model": cfg.model, "messages": api_messages, "temperature": cfg.temperature, "max_tokens": cfg.max_tokens}
+        if cfg.seed is not None:
+            body["seed"] = cfg.seed
+        
+        start_ts = time.time()
+        for attempt in range(cfg.max_retries + 1):
+            try:
+                if provider in ["openai", "openai-official"]:
+                    client = self._get_openai_client(cfg)
+                    response = client.chat.completions.create(model=cfg.model, messages=api_messages, temperature=cfg.temperature, max_tokens=cfg.max_tokens, timeout=cfg.timeout_sec)
+                    meta["latency_ms"] = int((time.time() - start_ts) * 1000)
+                    content = response.choices[0].message.content or ""
+                    usage = {"prompt_tokens": response.usage.prompt_tokens, "completion_tokens": response.usage.completion_tokens, "total_tokens": response.usage.total_tokens}
+                    self._prompt_tokens_used += usage.get("prompt_tokens", 0)
+                    self._completion_tokens_used += usage.get("completion_tokens", 0)
+                    meta["usage"] = usage
+                    
+                    parsed = None
+                    if content.strip():
+                        try:
+                            parsed = json.loads(content.strip())
+                        except json.JSONDecodeError:
+                            parsed = self._extract_json_with_improved_logic(content)
+                            if not parsed:
+                                parsed = {"raw_content": content}
+                    else:
+                        parsed = {"raw_content": ""}
+                    
+                    cache_write = cfg.cache_write_enabled if cfg.cache_write_enabled is not None else cfg.cache_enabled
+                    if cache_write and self.cache_dir:
+                        cache_key = self._make_cache_key_with_date(role, cfg, system_prompt, user_prompt, trade_date, retry_attempt)
+                        self._cache_payload(cache_key, parsed, role, cfg, system_prompt, user_prompt, run_id, {"choices": [{"message": {"content": content}}], "usage": usage}, retry_attempt)
+                    
+                    assistant_msg = Message.assistant(content).with_metadata(role=role, trade_date=trade_date, run_id=run_id, model=cfg.model, tokens_used=usage.get("total_tokens", 0))
+                    return parsed, meta, assistant_msg
+                else:
+                    client = self._get_client(cfg.base_url, cfg.timeout_sec)
+                    response = client.post("/chat/completions", headers=headers, json=body)
+                    if response.status_code == 200:
+                        meta["latency_ms"] = int((time.time() - start_ts) * 1000)
+                        response_data = response.json()
+                        content = response_data.get("choices", [{}])[0].get("message", {}).get("content", "")
+                        meta["usage"] = response_data.get("usage", {})
+                        parsed = None
+                        if content.strip():
+                            try:
+                                parsed = json.loads(content.strip())
+                            except json.JSONDecodeError:
+                                parsed = self._extract_json_with_improved_logic(content) or {"raw_content": content}
+                        else:
+                            parsed = {"raw_content": ""}
+                        assistant_msg = Message.assistant(content).with_metadata(role=role, trade_date=trade_date, run_id=run_id, model=cfg.model)
+                        return parsed, meta, assistant_msg
+                    elif response.status_code == 429:
+                        if attempt < cfg.max_retries:
+                            time.sleep(cfg.backoff_factor ** attempt)
+                            continue
+                        return None, {**meta, "reason": "rate_limit_exceeded"}, None
+                    else:
+                        if attempt < cfg.max_retries:
+                            time.sleep(cfg.backoff_factor ** attempt)
+                            continue
+                        return None, {**meta, "reason": f"HTTP_{response.status_code}"}, None
+            except openai.RateLimitError:
+                if attempt < cfg.max_retries:
+                    time.sleep(cfg.backoff_factor ** attempt)
+                    continue
+                return None, {**meta, "reason": "rate_limit_exceeded"}, None
+            except Exception as e:
+                if attempt < cfg.max_retries:
+                    time.sleep(cfg.backoff_factor ** attempt)
+                    continue
+                return None, {**meta, "reason": f"exception_{str(e)}"}, None
+        return None, {**meta, "reason": "max_retries_exceeded"}, None
 
     def _call_openai_official(self, cfg: LLMConfig, system_prompt: str, user_prompt: str) -> Dict[str, Any]:
         """Call API using OpenAI official client"""

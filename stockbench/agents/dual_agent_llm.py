@@ -1,17 +1,23 @@
 from __future__ import annotations
 
-import logging
-from typing import Dict, List, Optional
+import warnings
+from typing import Dict, List, Optional, Any
 import os
 import json
 from datetime import datetime
-
-logger = logging.getLogger(__name__)
+from loguru import logger
 
 from stockbench.llm.llm_client import LLMClient, LLMConfig
 from stockbench.utils.formatting import round_numbers_in_obj
 from stockbench.agents.fundamental_filter_agent import filter_stocks_needing_fundamental
 from stockbench.core.features import build_features_for_prompt
+from stockbench.core.pipeline_context import PipelineContext
+from stockbench.core.decorators import traced_agent
+from stockbench.utils.log_schemas import AgentLog, DecisionLog, FeatureLog
+
+# Phase 7: 接入 Memory 和 Message 系统
+from stockbench.core.message import Message, build_conversation
+from stockbench.memory import DecisionEpisode
 
 
 def _prompt_dir() -> str:
@@ -57,8 +63,12 @@ def _filter_hallucination_decisions(decisions_data: dict, valid_symbols: set) ->
     
     # Log filtered hallucinated decisions
     if hallucinated_symbols:
-        logger.warning(f"[HALLUCINATION_FILTER] Filtered hallucinated decision symbols: {hallucinated_symbols}")
-        logger.info(f"[FILTER_STATS] Valid decisions: {len(filtered_decisions)}, Filtered decisions: {len(hallucinated_symbols)}")
+        logger.warning(
+            "[AGENT_DECISION] Filtered hallucinated symbols",
+            hallucinated_symbols=hallucinated_symbols,
+            valid_count=len(filtered_decisions),
+            filtered_count=len(hallucinated_symbols)
+        )
     
     return filtered_decisions
 
@@ -83,19 +93,33 @@ def _validate_decision_logic(action: str, target_cash_amount: float, current_pos
         # Increase operation: target amount should be greater than current position value
         if action == "increase":
             if target_cash_amount <= current_position_value:
-                logger.warning(f"[VALIDATION_ERROR] Increase operation unreasonable: target_cash_amount({target_cash_amount:.2f}) <= current_position_value({current_position_value:.2f})")
+                logger.warning(
+                    "[BT_VALIDATE] Increase operation unreasonable",
+                    action=action,
+                    target_cash_amount=round(target_cash_amount, 2),
+                    current_position_value=round(current_position_value, 2)
+                )
                 return False
         
         # Decrease operation: target amount should be less than current position value
         elif action == "decrease":
             if target_cash_amount >= current_position_value:
-                logger.warning(f"[VALIDATION_ERROR] Decrease operation unreasonable: target_cash_amount({target_cash_amount:.2f}) >= current_position_value({current_position_value:.2f})")
+                logger.warning(
+                    "[BT_VALIDATE] Decrease operation unreasonable",
+                    action=action,
+                    target_cash_amount=round(target_cash_amount, 2),
+                    current_position_value=round(current_position_value, 2)
+                )
                 return False
         
         # Close operation: target amount should be 0 or close to 0
         elif action == "close":
             if target_cash_amount > 0.01:  # Allow small margin of error
-                logger.warning(f"[VALIDATION_ERROR] Close operation unreasonable: target_cash_amount({target_cash_amount:.2f}) > 0")
+                logger.warning(
+                    "[BT_VALIDATE] Close operation unreasonable",
+                    action=action,
+                    target_cash_amount=round(target_cash_amount, 2)
+                )
                 return False
         
         # Hold operation: target amount should equal current position value (allow small fluctuations)
@@ -103,21 +127,36 @@ def _validate_decision_logic(action: str, target_cash_amount: float, current_pos
             # For hold operation, allow certain tolerance range
             tolerance = max(current_position_value * 0.01, 100.0)  # 1% or 100 unit tolerance
             if abs(target_cash_amount - current_position_value) > tolerance:
-                logger.warning(f"[VALIDATION_WARNING] Hold operation has significant deviation: target_cash_amount({target_cash_amount:.2f}) vs current_position_value({current_position_value:.2f}), difference: {abs(target_cash_amount - current_position_value):.2f}")
-                # For hold operation, only warning, don't return False
+                logger.warning(
+                    "[BT_VALIDATE] Hold operation has significant deviation",
+                    action=action,
+                    target_cash_amount=round(target_cash_amount, 2),
+                    current_position_value=round(current_position_value, 2),
+                    difference=round(abs(target_cash_amount - current_position_value), 2)
+                )
         
-        logger.info(f"[VALIDATION_OK] {action} operation validation passed: target_cash_amount({target_cash_amount:.2f}) vs current_position_value({current_position_value:.2f})")
+        logger.debug(
+            "[BT_VALIDATE] Validation passed",
+            action=action,
+            target_cash_amount=round(target_cash_amount, 2),
+            current_position_value=round(current_position_value, 2)
+        )
         return True
         
     except Exception as e:
-        logger.error(f"[VALIDATION_ERROR] Error occurred during validation: {e}")
+        logger.error(
+            "[BT_VALIDATE] Validation error",
+            error=str(e)
+        )
         return False
 
 
+@traced_agent("decision_agent")
 def decide_batch_dual_agent(features_list: List[Dict], cfg: Dict | None = None, enable_llm: bool = True, 
                            bars_data: Dict[str, Dict] = None, 
                            run_id: Optional[str] = None, previous_decisions: Optional[Dict] = None, 
-                           decision_history: Optional[Dict[str, List[Dict]]] = None, ctx: Dict = None, 
+                           decision_history: Optional[Dict[str, List[Dict]]] = None,
+                           ctx: Optional[PipelineContext | Dict] = None, 
                            rejected_orders: Optional[List[Dict]] = None) -> Dict[str, Dict]:
     """
     Dual agent batch decision making. Input is features list, returns {symbol: decision_output_dict}.
@@ -133,14 +172,73 @@ def decide_batch_dual_agent(features_list: List[Dict], cfg: Dict | None = None, 
         enable_llm: Whether to enable LLM, if False then fallback to neutral decisions
         bars_data: Raw historical data dictionary {symbol: {"bars_day": df}} for feature construction
         run_id: Backtest run ID for organizing LLM cache directory
-        previous_decisions: Previous decision results for backward compatibility
-        decision_history: Long-term historical decision records
-        ctx: Context dictionary containing portfolio information
+        previous_decisions: **DEPRECATED** - Use ctx.memory.episodes instead (will be removed in v1.0)
+        decision_history: **DEPRECATED** - Use ctx.memory.episodes instead (will be removed in v1.0)
+        ctx: PipelineContext containing portfolio and memory (Dict ctx is deprecated)
         rejected_orders: List of rejected order information for retry logic
         
     Returns:
         Dictionary {symbol: decision_dict, "__meta__": meta_dict}
+    
+    .. deprecated:: 0.8.0
+       Parameters `previous_decisions` and `decision_history` are deprecated.
+       Use `ctx.memory.episodes` for historical decision management instead.
+       Dict-type `ctx` is also deprecated; use PipelineContext instead.
     """
+    
+    # === 废弃参数检测 ===
+    if previous_decisions is not None:
+        warnings.warn(
+            "Parameter 'previous_decisions' is deprecated and will be removed in v1.0. "
+            "Use ctx.memory.episodes instead.",
+            DeprecationWarning,
+            stacklevel=2
+        )
+    
+    if decision_history is not None:
+        warnings.warn(
+            "Parameter 'decision_history' is deprecated and will be removed in v1.0. "
+            "Use ctx.memory.episodes instead.",
+            DeprecationWarning,
+            stacklevel=2
+        )
+    
+    # === PipelineContext 兼容层 ===
+    pipeline_ctx = None
+    
+    if ctx is not None:
+        if isinstance(ctx, PipelineContext):
+            pipeline_ctx = ctx
+            # 从 PipelineContext 获取参数（如果未显式传入）
+            cfg = cfg or pipeline_ctx.config
+            run_id = run_id or pipeline_ctx.run_id
+            bars_data = bars_data or pipeline_ctx.get("bars_data")
+            rejected_orders = rejected_orders or pipeline_ctx.get("rejected_orders")
+        else:
+            # Dict ctx 已废弃，发出警告
+            warnings.warn(
+                "Passing Dict as 'ctx' is deprecated and will be removed in v1.0. "
+                "Use PipelineContext instead.",
+                DeprecationWarning,
+                stacklevel=2
+            )
+            # 临时保留兼容性
+            logger.warning("[SYS_ERROR] Using legacy Dict ctx, please migrate to PipelineContext")
+    
+    # ==================== Phase 7: 接入 Memory 系统 ====================
+    # 从 EpisodicMemory 加载历史（唯一数据源）
+    decision_history = {}
+    if pipeline_ctx and pipeline_ctx.memory_enabled:
+        # 提取所有 symbol
+        symbols = [item.get("symbol", "UNKNOWN") for item in features_list]
+        # 使用新的字典格式方法，符合 input_prompt 的 history 格式
+        decision_history = pipeline_ctx.memory.episodes.get_history_for_prompt_dict(symbols, n=7)
+        symbols_loaded = sum(1 for v in decision_history.values() if v)
+        if symbols_loaded > 0:
+            logger.info(
+                "[MEM_LOAD] Loaded decision history from EpisodicMemory",
+                symbols_loaded=symbols_loaded
+            )
     
     results: Dict[str, Dict] = {}
     meta_agg: Dict[str, object] = {"calls": 0, "cache_hits": 0, "parse_errors": 0, "latency_ms_sum": 0, 
@@ -167,29 +265,34 @@ def decide_batch_dual_agent(features_list: List[Dict], cfg: Dict | None = None, 
         results["__meta__"] = meta_agg
         return results
     
-    logger.info(f"🚀 [DUAL_AGENT] Starting dual-agent decision process for {len(features_list)} stocks")
+    logger.info(
+        "[AGENT_DECISION] Starting dual-agent decision process",
+        stock_count=len(features_list)
+    )
     
     try:
         # Step 1: Fundamental Filter Agent - determines which stocks need fundamental analysis
-        logger.info(f"📊 [DUAL_AGENT] Step 1: Calling fundamental filter agent")
+        logger.info("[AGENT_FILTER] Step 1: Calling fundamental filter agent")
+        # 使用 PipelineContext
+        effective_ctx = pipeline_ctx
         filter_result = filter_stocks_needing_fundamental(
             features_list=features_list,
-            cfg=cfg,
             enable_llm=enable_llm,
-            run_id=run_id,
-            ctx=ctx,
-            previous_decisions=previous_decisions,
-            decision_history=decision_history
+            ctx=effective_ctx
         )
         
         stocks_need_fundamental = filter_result.get("stocks_need_fundamental", [])
         reasoning = filter_result.get("reasoning", {})
         
-        logger.info(f"✅ [DUAL_AGENT] Filter completed: {len(stocks_need_fundamental)}/{len(features_list)} stocks need fundamental analysis")
-        logger.info(f"📋 [DUAL_AGENT] Stocks needing fundamental: {stocks_need_fundamental}")
+        logger.info(
+            "[AGENT_FILTER] Filter completed",
+            need_fundamental=len(stocks_need_fundamental),
+            total=len(features_list),
+            stocks=stocks_need_fundamental
+        )
         
         # Step 2: Enhanced Feature Construction - build features with/without fundamental data
-        logger.info(f"🔧 [DUAL_AGENT] Step 2: Building enhanced features based on filtering results")
+        logger.info("[FEATURE_BUILD] Step 2: Building enhanced features based on filtering results")
         enhanced_features_list = []
         
         for item in features_list:
@@ -210,7 +313,11 @@ def decide_batch_dual_agent(features_list: List[Dict], cfg: Dict | None = None, 
                     missing_keys = [key for key in required_keys if key not in original_data]
                     
                     if missing_keys:
-                        logger.warning(f"⚠️ [DUAL_AGENT] {symbol}: Missing data components for rebuild: {missing_keys}")
+                        logger.warning(
+                            "[FEATURE_BUILD] Missing data components for rebuild",
+                            symbol=symbol,
+                            missing_keys=missing_keys
+                        )
                     
                     # Determine whether to include fundamental data based on filter results
                     exclude_fundamental = symbol not in stocks_need_fundamental
@@ -254,20 +361,36 @@ def decide_batch_dual_agent(features_list: List[Dict], cfg: Dict | None = None, 
                     rebuild_success = True
                     
                     if symbol in stocks_need_fundamental:
-                        logger.debug(f"📊 [DUAL_AGENT] {symbol}: Successfully rebuilt features WITH fundamental data")
+                        logger.debug(
+                            "[FEATURE_BUILD] Successfully rebuilt features WITH fundamental data",
+                            symbol=symbol
+                        )
                     else:
-                        logger.debug(f"🎯 [DUAL_AGENT] {symbol}: Successfully rebuilt features WITHOUT fundamental data")
+                        logger.debug(
+                            "[FEATURE_BUILD] Successfully rebuilt features WITHOUT fundamental data",
+                            symbol=symbol
+                        )
                         
                 except Exception as e:
-                    logger.warning(f"⚠️ [DUAL_AGENT] {symbol}: Failed to rebuild features: {e}")
+                    logger.warning(
+                        "[FEATURE_BUILD] Failed to rebuild features",
+                        symbol=symbol,
+                        error=str(e)
+                    )
                     enhanced_features = None
             else:
-                logger.warning(f"⚠️ [DUAL_AGENT] {symbol}: bars_data not available for feature rebuild")
+                logger.warning(
+                    "[FEATURE_BUILD] bars_data not available for feature rebuild",
+                    symbol=symbol
+                )
             
             # Fallback: use original features if rebuild failed or data unavailable
             if not rebuild_success or enhanced_features is None:
                 enhanced_features = features.copy()
-                logger.info(f"🔄 [DUAL_AGENT] {symbol}: Using original features as fallback (may lack fundamental data)")
+                logger.info(
+                    "[FEATURE_BUILD] Using original features as fallback",
+                    symbol=symbol
+                )
             
             # Add filter reasoning to the enhanced features
             enhanced_features["filter_reasoning"] = reasoning.get(symbol, "No reasoning provided")
@@ -282,18 +405,16 @@ def decide_batch_dual_agent(features_list: List[Dict], cfg: Dict | None = None, 
         stocks_with_fundamental = len(stocks_need_fundamental)
         stocks_without_fundamental = len(enhanced_features_list) - stocks_with_fundamental
         
-        logger.info(f"✅ [DUAL_AGENT] Enhanced features built for {len(enhanced_features_list)} stocks:")
-        logger.info(f"   📊 {stocks_with_fundamental} stocks WITH fundamental data: {list(stocks_need_fundamental)}")
-        logger.info(f"   🎯 {stocks_without_fundamental} stocks WITHOUT fundamental data")
-        
-        # Log feature optimization for monitoring
-        if stocks_with_fundamental > 0:
-            logger.info(f"🔧 [DUAL_AGENT] Feature enhancement: Added fundamental data for {stocks_with_fundamental} stocks requiring deeper analysis")
-        if stocks_without_fundamental > 0:
-            logger.info(f"🔧 [DUAL_AGENT] Feature optimization: Excluded fundamental data for {stocks_without_fundamental} stocks to reduce noise")
+        logger.info(
+            "[FEATURE_BUILD] Enhanced features built",
+            total=len(enhanced_features_list),
+            with_fundamental=stocks_with_fundamental,
+            without_fundamental=stocks_without_fundamental,
+            stocks_with_fund=list(stocks_need_fundamental)
+        )
         
         # Step 3: Decision Agent - makes final trading decisions using enhanced features
-        logger.info(f"🎯 [DUAL_AGENT] Step 3: Calling decision agent with enhanced features")
+        logger.info("[AGENT_DECISION] Step 3: Calling decision agent with enhanced features")
         
         # Use the decision agent prompt from config
         prompt_name = (cfg or {}).get("agents", {}).get("dual_agent", {}).get("decision_agent", {}).get("prompt", "decision_agent_v1.txt")
@@ -306,7 +427,7 @@ def decide_batch_dual_agent(features_list: List[Dict], cfg: Dict | None = None, 
         
         # If no llm config found, this is an error - don't fallback to defaults
         if not llm_cfg_raw:
-            logger.error("❌ No LLM configuration found! Please specify --llm-profile parameter.")
+            logger.error("[SYS_ERROR] No LLM configuration found! Please specify --llm-profile parameter.")
             raise ValueError("No LLM configuration found. Use --llm-profile parameter to specify configuration.")
         
         # Get dual agent decision configuration
@@ -352,7 +473,8 @@ def decide_batch_dual_agent(features_list: List[Dict], cfg: Dict | None = None, 
         
         client = LLMClient()
         
-        return _decide_batch_portfolio_dual_agent(
+        # 调用内部决策函数
+        decision_results = _decide_batch_portfolio_dual_agent(
             enhanced_features_list,
             llm_cfg,
             system_prompt,
@@ -363,9 +485,16 @@ def decide_batch_dual_agent(features_list: List[Dict], cfg: Dict | None = None, 
             run_id,
             previous_decisions,
             decision_history,
-            ctx,
+            effective_ctx,
             rejected_orders,
+            pipeline_ctx=pipeline_ctx,  # Phase 7: 传递 pipeline_ctx 用于 Memory 存储
         )
+        
+        # 如果使用 PipelineContext，存入数据总线
+        if pipeline_ctx:
+            pipeline_ctx.put("decisions", decision_results, agent_name="decision_agent")
+        
+        return decision_results
     
     except Exception as e:
         logger.error(f"❌ [DUAL_AGENT] Error during dual-agent processing: {e}")
@@ -395,9 +524,14 @@ def decide_batch_dual_agent(features_list: List[Dict], cfg: Dict | None = None, 
 def _decide_batch_portfolio_dual_agent(features_list: List[Dict], llm_cfg: LLMConfig, system_prompt: str,
                                       client: LLMClient, meta_agg: Dict, cfg: Dict, bars_data: Dict, 
                                       run_id: Optional[str], previous_decisions: Optional[Dict] = None, 
-                                      decision_history: Optional[Dict[str, List[Dict]]] = None, ctx: Dict = None, 
-                                      rejected_orders: Optional[List[Dict]] = None) -> Dict[str, Dict]:
-    """Dual-agent batch portfolio decision making with comprehensive retry mechanism"""
+                                      decision_history: Optional[Dict[str, List[Dict]]] = None,
+                                      ctx: Optional[PipelineContext | Dict] = None, 
+                                      rejected_orders: Optional[List[Dict]] = None,
+                                      pipeline_ctx: Optional[PipelineContext] = None) -> Dict[str, Dict]:
+    """Dual-agent batch portfolio decision making with comprehensive retry mechanism
+    
+    Phase 7 更新: 新增 pipeline_ctx 参数用于 Memory 系统集成
+    """
     results = {}
     
     # Build input format conforming to prompt template
@@ -420,8 +554,16 @@ def _decide_batch_portfolio_dual_agent(features_list: List[Dict], llm_cfg: LLMCo
     # Build portfolio info (similar to single agent)
     portfolio_cfg = cfg.get("portfolio", {}) if cfg else {}
     
-    if ctx and "portfolio" in ctx:
-        current_cash = float(ctx["portfolio"].cash)
+    # 获取 portfolio 信息（支持 PipelineContext 和 Dict 两种方式）
+    portfolio_from_ctx = None
+    if ctx is not None:
+        if isinstance(ctx, PipelineContext):
+            portfolio_from_ctx = ctx.get("portfolio")
+        elif isinstance(ctx, dict) and "portfolio" in ctx:
+            portfolio_from_ctx = ctx["portfolio"]
+    
+    if portfolio_from_ctx:
+        current_cash = float(portfolio_from_ctx.cash)
         total_assets = current_cash + total_current_position
         available_cash = current_cash
         available_cash_ratio = current_cash / total_assets if total_assets > 0 else 0.0
@@ -436,20 +578,14 @@ def _decide_batch_portfolio_dual_agent(features_list: List[Dict], llm_cfg: LLMCo
     min_cash_ratio = portfolio_cfg.get("min_cash_ratio", 0.0)
     
     # Build historical decision records
+    # Phase 9: 简化历史加载逻辑，优先使用 Memory 系统（Phase 7 已在上方加载）
     if decision_history:
-        logger.info(f"[DEBUG] Dual agent decision: Using long-term historical records, containing history of {len(decision_history)} symbols")
+        logger.info(f"[DEBUG] Dual agent decision: Using historical records, containing history of {len(decision_history)} symbols")
         history = decision_history
     else:
-        logger.info(f"[DEBUG] Dual agent decision: Building historical records from previous_decisions, previous_decisions={'available' if previous_decisions else 'none'}")
-        # Build current_features for historical record correction
-        current_features = {}
-        for item in features_list:
-            symbol = item.get("symbol", "UNKNOWN")
-            features = item.get("features", {})
-            current_features[symbol] = features
-        
-        history = _build_history_from_previous_decisions(previous_decisions, current_features)
-        logger.info(f"[DEBUG] Dual agent decision: Historical record construction completed, containing history of {len(history)} symbols")
+        # Fallback: 无历史记录可用
+        logger.info(f"[DEBUG] Dual agent decision: No historical records available")
+        history = {}
     
     # Build complete input data
     portfolio_input = {
@@ -492,8 +628,13 @@ def _decide_batch_portfolio_dual_agent(features_list: List[Dict], llm_cfg: LLMCo
             
             # Method 3: Try to extract from context if available
             if not trade_date and ctx:
-                if "date" in ctx:
+                ctx_date = None
+                if isinstance(ctx, PipelineContext):
+                    ctx_date = ctx.date
+                elif isinstance(ctx, dict) and "date" in ctx:
                     ctx_date = ctx["date"]
+                
+                if ctx_date:
                     if hasattr(ctx_date, 'strftime'):
                         trade_date = ctx_date.strftime("%Y-%m-%d")
                     elif isinstance(ctx_date, str):
@@ -611,6 +752,22 @@ def _decide_batch_portfolio_dual_agent(features_list: List[Dict], llm_cfg: LLMCo
         # Call LLM with complete retry attempt info
         data, meta = client.generate_json("decision_agent", llm_cfg, system_prompt, user_prompt,
                                          trade_date=trade_date, run_id=run_id, retry_attempt=total_retry_attempt)
+        
+        # ==================== Phase 7.2: 更新对话历史 ====================
+        if pipeline_ctx and data:
+            try:
+                # 记录 user prompt（简化版，只取前 500 字符）
+                user_msg = Message.user(user_prompt[:500] + "..." if len(user_prompt) > 500 else user_prompt)
+                user_msg = user_msg.with_metadata(agent="decision_agent", trade_date=trade_date)
+                pipeline_ctx.add_to_history(user_msg)
+                
+                # 记录 assistant response（简化版）
+                response_summary = json.dumps(data, ensure_ascii=False)[:500] if data else "No response"
+                assistant_msg = Message.assistant(response_summary)
+                assistant_msg = assistant_msg.with_metadata(agent="decision_agent", trade_date=trade_date, model=llm_cfg.model)
+                pipeline_ctx.add_to_history(assistant_msg)
+            except Exception as e:
+                logger.debug(f"[DUAL_AGENT] Failed to update conversation history: {e}")
         
         meta_agg["calls"] = int(meta_agg["calls"]) + 1
         meta_agg["cache_hits"] = int(meta_agg["cache_hits"]) + (1 if meta.get("cached") else 0)
@@ -846,6 +1003,54 @@ def _decide_batch_portfolio_dual_agent(features_list: List[Dict], llm_cfg: LLMCo
                     }
                     results[symbol] = round_numbers_in_obj(hold_decision, 2)
             
+            # ==================== Phase 7: 存储决策到 EpisodicMemory ====================
+            if pipeline_ctx and pipeline_ctx.memory_enabled:
+                episodes_saved = 0
+                for symbol, decision in results.items():
+                    if symbol == "__meta__":
+                        continue
+                    action = decision.get("action", "hold")
+                    # 只存储非 hold 决策（或可配置）
+                    if action != "hold":
+                        try:
+                            # 获取该 symbol 的特征用于 market_context
+                            symbol_features = symbols.get(symbol, {}).get("features", {})
+                            
+                            # 构建完整的 market_context，包含所有特征数据和投资组合信息
+                            # 所有原始数据都在这里，避免 signals 字段的冗余复制
+                            complete_market_context = {
+                                "market_data": symbol_features.get("market_data", {}),
+                                "news_events": symbol_features.get("news_events", {}),
+                                "fundamental_data": symbol_features.get("fundamental_data", {}),
+                                "position_state": symbol_features.get("position_state", {}),
+                                "filter_reasoning": symbol_features.get("filter_reasoning", ""),
+                                "portfolio_info": {
+                                    "total_assets": total_assets,
+                                    "available_cash": available_cash,
+                                    "position_value": total_current_position,
+                                }
+                            }
+                            
+                            episode = DecisionEpisode(
+                                symbol=symbol,
+                                action=action,
+                                target_amount=decision.get("target_cash_amount", 0),
+                                cash_change=decision.get("cash_change", 0.0),
+                                shares=symbol_features.get("position_state", {}).get("shares", 0.0),
+                                reasoning="; ".join(decision.get("reasons", [])),
+                                reasons=decision.get("reasons", []),
+                                confidence=decision.get("confidence", 0.5),
+                                market_context=complete_market_context,
+                                signals={},  # 保留字段但不填充，避免数据冗余。未来可用于派生指标（技术指标、情感评分等）
+                                tags=_extract_decision_tags(decision, symbol_features)
+                            )
+                            pipeline_ctx.memory.episodes.add(episode)
+                            episodes_saved += 1
+                        except Exception as e:
+                            logger.warning(f"[DUAL_AGENT] Failed to save episode for {symbol}: {e}")
+                if episodes_saved > 0:
+                    logger.info(f"💾 [DUAL_AGENT] Saved {episodes_saved} decisions to EpisodicMemory")
+            
             results["__meta__"] = meta_agg
             return results
         
@@ -923,69 +1128,127 @@ def _decide_batch_portfolio_dual_agent(features_list: List[Dict], llm_cfg: LLMCo
     return results
 
 
-def _build_history_from_previous_decisions(previous_decisions: Optional[Dict] = None, current_features: Optional[Dict] = None) -> Dict[str, List[Dict]]:
-    """Build historical records from previous decision results (same as single agent)"""
-    history = {}
+def _extract_decision_tags(decision: Dict, features: Dict = None) -> List[str]:
+    """
+    Phase 7: 从决策和特征中提取标签用于 EpisodicMemory 索引
     
-    logger.info(f"[DEBUG] Building historical decision records: previous_decisions={'Yes' if previous_decisions else 'No'}")
+    基于实际的 features 结构（market_data, fundamental_data, news_events, position_state）
+    提取可靠的标签，用于后续检索和分析。
     
-    if not previous_decisions:
-        logger.info(f"[DEBUG] No historical decision records, returning empty history")
-        return history
-    
-    try:
-        decisions = {k: v for k, v in previous_decisions.items() if k != "__meta__"}
-        logger.info(f"[DEBUG] Extracted historical decisions for {len(decisions)} symbols")
+    Args:
+        decision: 决策字典，包含 action, confidence, reasons 等字段
+        features: 特征字典，包含 market_data, fundamental_data (可选), news_events, position_state
         
-        history_date = None
-        if "__meta__" in previous_decisions:
-            meta = previous_decisions["__meta__"]
-            if isinstance(meta, dict) and "date" in meta:
-                history_date = meta["date"]
-                logger.info(f"[DEBUG] Historical decision date: {history_date}")
-            else:
-                logger.info(f"[DEBUG] No valid historical decision date found")
+    Returns:
+        标签列表（去重后）
+    """
+    tags = []
+    
+    # 1. 从 action 提取标签
+    action = decision.get("action", "hold")
+    tags.append(action)
+    
+    # 2. 从 confidence 提取标签
+    confidence = decision.get("confidence", 0.5)
+    if confidence >= 0.8:
+        tags.append("high_confidence")
+    elif confidence <= 0.3:
+        tags.append("low_confidence")
+    
+    # 3. 从 reasons 提取英文关键词（只匹配英文，因为模型输出是英文）
+    reasons = decision.get("reasons", [])
+    reason_text = " ".join(reasons).lower() if reasons else ""
+    
+    # 英文关键词映射
+    keywords = [
+        "breakout", "support", "resistance", "trend", "momentum",
+        "overbought", "oversold", "risk", "stop_loss", "volatility",
+        "volume", "news", "earnings", "dividend", "valuation",
+        "fundamental", "technical", "pe_ratio", "market_cap"
+    ]
+    
+    for keyword in keywords:
+        if keyword in reason_text:
+            tags.append(keyword)
+    
+    # 4. 从实际的 features 结构提取标签
+    if features and isinstance(features, dict):
+        # 4.1 从 market_data 提取价格趋势标签
+        market_data = features.get("market_data", {})
+        if market_data:
+            close_7d = market_data.get("close_7d", [])
+            if len(close_7d) >= 2:
+                # 计算最近趋势（最后一天 vs 倒数第二天）
+                try:
+                    last_close = close_7d[-1]
+                    prev_close = close_7d[-2]
+                    if last_close > 0 and prev_close > 0:
+                        change_pct = (last_close - prev_close) / prev_close
+                        if change_pct > 0.02:  # 上涨超过 2%
+                            tags.append("uptrend")
+                        elif change_pct < -0.02:  # 下跌超过 2%
+                            tags.append("downtrend")
+                except (IndexError, ValueError, TypeError):
+                    pass
+        
+        # 4.2 从 fundamental_data 提取估值标签
+        fundamental_data = features.get("fundamental_data", {})
+        if fundamental_data:
+            tags.append("has_fundamental")
+            
+            # PE 估值标签
+            pe_ratio = fundamental_data.get("pe_ratio", 0)
+            if pe_ratio > 0:
+                if pe_ratio > 30:
+                    tags.append("high_pe")
+                elif pe_ratio < 15:
+                    tags.append("low_pe")
+            
+            # 股息标签
+            dividend_yield = fundamental_data.get("dividend_yield", 0)
+            if dividend_yield > 2.0:  # 股息率超过 2%
+                tags.append("dividend_stock")
+            
+            # 市值标签
+            market_cap = fundamental_data.get("market_cap", 0)
+            if market_cap > 0:
+                if market_cap > 100_000_000_000:  # > 1000亿美元
+                    tags.append("large_cap")
+                elif market_cap < 10_000_000_000:  # < 100亿美元
+                    tags.append("small_cap")
         else:
-            logger.info(f"[DEBUG] No meta information found")
+            tags.append("no_fundamental")
         
-        for symbol, decision in decisions.items():
-            if not isinstance(decision, dict):
-                logger.info(f"[DEBUG] Skipping invalid decision record: {symbol}")
-                continue
+        # 4.3 从 news_events 提取新闻标签
+        news_events = features.get("news_events", {})
+        if news_events:
+            top_events = news_events.get("top_k_events", [])
+            if top_events and top_events != ["No news available"]:
+                tags.append("has_news")
+                # 可以进一步分析新闻内容提取情感标签
+                news_text = " ".join(top_events).lower()
+                if any(word in news_text for word in ["positive", "beat", "strong", "growth", "upgrade"]):
+                    tags.append("positive_news")
+                elif any(word in news_text for word in ["negative", "miss", "weak", "loss", "downgrade"]):
+                    tags.append("negative_news")
+        
+        # 4.4 从 position_state 提取持仓标签
+        position_state = features.get("position_state", {})
+        if position_state:
+            current_value = position_state.get("current_position_value", 0)
+            holding_days = position_state.get("holding_days", 0)
+            
+            if current_value > 0:
+                tags.append("has_position")
                 
-            # Fix historical record target_cash_amount logic
-            action = decision.get("action", "hold")
-            cash_change = decision.get("cash_change", 0.0)
-            
-            # For hold operations, if target_cash_amount is 0, try to get actual position value from current features
-            target_cash_amount = decision.get("target_cash_amount", 0.0)
-            if action == "hold" and target_cash_amount == 0.0 and cash_change == 0.0:
-                # Try to get current position value from current_features
-                if current_features and symbol in current_features:
-                    current_pos = current_features[symbol].get("position_state", {}).get("current_position_value", 0.0)
-                    if current_pos > 0:
-                        target_cash_amount = current_pos
-                        logger.debug(f"[DUAL_AGENT] Corrected Hold operation history record {symbol}: target_cash_amount corrected from 0.0 to {target_cash_amount}")
-                    else:
-                        logger.debug(f"[DUAL_AGENT] Hold operation history record {symbol}: current position is 0, keep target_cash_amount=0")
-                else:
-                    logger.debug(f"[DUAL_AGENT] Hold operation history record {symbol}: cannot get current position, keep target_cash_amount=0")
-            
-            history_record = {
-                "date": history_date,
-                "action": action,
-                "cash_change": cash_change,
-                "target_cash_amount": target_cash_amount,
-                "reasons": decision.get("reasons", []),
-                "confidence": decision.get("confidence", 0.5)
-            }
-            
-            history[symbol] = [history_record]
-            logger.info(f"[DEBUG] Built historical record for {symbol}: action={history_record['action']}, cash_change={history_record['cash_change']}, target_cash_amount={history_record['target_cash_amount']}")
-        
-        logger.info(f"[DEBUG] Successfully built historical records for {len(history)} symbols")
-            
-    except Exception as e:
-        logger.error(f"Failed to build historical records: {e}")
+                # 持仓时间标签
+                if holding_days > 90:
+                    tags.append("long_hold")
+                elif holding_days > 30:
+                    tags.append("medium_hold")
+                elif holding_days > 0:
+                    tags.append("short_hold")
+            else:
+                tags.append("no_position")
     
-    return history
+    return list(set(tags))  # 去重

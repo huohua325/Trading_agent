@@ -6,6 +6,7 @@ import random
 from typing import Dict, List, Optional, Tuple
 
 import httpx
+from loguru import logger
 
 
 class PolygonError(Exception):
@@ -28,9 +29,6 @@ class PolygonClient:
         return self._client
 
     def _request(self, method: str, path: str, params: Optional[Dict] = None) -> Dict:
-        import logging
-        logger = logging.getLogger(__name__)
-        
         params = dict(params or {})
         if "apiKey" not in params:
             params["apiKey"] = self.api_key
@@ -38,11 +36,13 @@ class PolygonClient:
         client = self._get_client()
         
         # Record HTTP request details
-        logger.debug(f"🌐 [Polygon] HTTP request: {method} {url}")
-        if logger.isEnabledFor(logging.DEBUG):
-            # Only show parameters at debug level, hide API key
-            safe_params = {k: v if k != "apiKey" else "***" for k, v in params.items()}
-            logger.debug(f"📋 [Polygon] Request parameters: {safe_params}")
+        safe_params = {k: v if k != "apiKey" else "***" for k, v in params.items()}
+        logger.debug(
+            "[DATA_API] Polygon HTTP request",
+            method=method,
+            url=url[:80],
+            params=safe_params
+        )
 
         # Exponential backoff + jitter
         backoff = 0.5
@@ -50,11 +50,7 @@ class PolygonClient:
         
         for attempt in range(6):
             try:
-                logger.debug(f"🔄 [Polygon] Attempt {attempt + 1} request")
                 resp = client.request(method, url, params=params)
-                
-                # Record response status
-                logger.debug(f"📊 [Polygon] Response status: {resp.status_code}")
                 
                 if resp.status_code == 429 or resp.status_code >= 500:
                     # Retryable
@@ -69,16 +65,30 @@ class PolygonClient:
                     
                     # Record retry information
                     if resp.status_code == 429:
-                        logger.warning(f"⚠️ [Polygon] Rate limited (429), retrying attempt {attempt + 2} after {sleep_s:.1f}s")
+                        logger.warning(
+                            "[DATA_API] Polygon rate limited, retrying",
+                            status_code=resp.status_code,
+                            attempt=attempt + 2,
+                            sleep_seconds=round(sleep_s, 1)
+                        )
                     else:
-                        logger.warning(f"⚠️ [Polygon] Server error ({resp.status_code}), retrying attempt {attempt + 2} after {sleep_s:.1f}s")
+                        logger.warning(
+                            "[DATA_API] Polygon server error, retrying",
+                            status_code=resp.status_code,
+                            attempt=attempt + 2,
+                            sleep_seconds=round(sleep_s, 1)
+                        )
                         
                     time.sleep(sleep_s)
                     continue
                 if 400 <= resp.status_code < 500:
                     # Non-429 client errors throw unified exception directly
                     error_text = resp.text[:500]  # Limit error message length
-                    logger.error(f"❌ [Polygon] Client error {resp.status_code}: {error_text}")
+                    logger.error(
+                        "[DATA_API] Polygon client error",
+                        status_code=resp.status_code,
+                        error_text=error_text
+                    )
                     raise PolygonError(resp.status_code, message=resp.text)
                     
                 resp.raise_for_status()
@@ -86,10 +96,17 @@ class PolygonClient:
                 # Parse JSON response
                 try:
                     json_data = resp.json()
-                    logger.debug(f"✅ [Polygon] Request successful, response size: ~{len(str(json_data))} characters")
+                    logger.debug(
+                        "[DATA_API] Polygon request successful",
+                        response_size=len(str(json_data))
+                    )
                     return json_data
                 except Exception as json_exc:
-                    logger.error(f"❌ [Polygon] JSON parsing failed: {json_exc}, response content: {resp.text[:200]}...")
+                    logger.error(
+                        "[DATA_API] Polygon JSON parsing failed",
+                        error=json_exc,
+                        response_content=resp.text[:200]
+                    )
                     return {}
                     
             except httpx.RequestError as req_exc:
@@ -97,7 +114,12 @@ class PolygonClient:
                 sleep_s = min(backoff * (2 ** attempt), 30.0)
                 sleep_s *= (0.8 + random.random() * 0.4)
                 
-                logger.warning(f"⚠️ [Polygon] Network request exception: {req_exc}, retrying attempt {attempt + 2} after {sleep_s:.1f}s")
+                logger.warning(
+                    "[DATA_API] Polygon network request exception",
+                    error=req_exc,
+                    attempt=attempt + 2,
+                    sleep_seconds=round(sleep_s, 1)
+                )
                 time.sleep(sleep_s)
                 continue
                 
@@ -105,15 +127,28 @@ class PolygonClient:
                 # Compatible with some cases where raise_for_status throws error
                 sc = e.response.status_code if e.response is not None else 0
                 if sc != 429 and 400 <= sc < 500:
-                    logger.error(f"❌ [Polygon] HTTP status error {sc}: {str(e)}")
+                    logger.error(
+                        "[DATA_API] Polygon HTTP status error",
+                        status_code=sc,
+                        error=str(e)
+                    )
                     raise PolygonError(sc, message=str(e))
                 # Other cases (like 5xx) go to retry
                 last_error = e
-                logger.warning(f"⚠️ [Polygon] HTTP status error {sc}, will retry")
+                logger.warning(
+                    "[DATA_API] Polygon HTTP status error",
+                    status_code=sc,
+                    error=str(e)
+                )
                 
         # Exceeded retry limit
-        logger.error(f"❌ [Polygon] Still failed after 6 retries, last error: {last_error}")
-        logger.debug(f"🔍 [Polygon] Failure analysis: Check network connection, API key validity, service status")
+        logger.error(
+            "[DATA_API] Polygon still failed after 6 retries",
+            last_error=last_error
+        )
+        logger.debug(
+            "[DATA_API] Failure analysis: Check network connection, API key validity, service status"
+        )
         return {}
 
     # Aggregates (minute/daily bars)
@@ -184,9 +219,6 @@ class PolygonClient:
 
     # News v2 (requires loop calls, use next_url to determine completion)
     def list_ticker_news(self, ticker: str, gte: str, lte: str, limit: int = 100, page_token: Optional[str] = None) -> Tuple[List[Dict], Optional[str]]:
-        import logging
-        logger = logging.getLogger(__name__)
-        
         path = "/v2/reference/news"
         params: Dict[str, object] = {
             "ticker": ticker,
@@ -201,13 +233,18 @@ class PolygonClient:
             params["cursor"] = page_token
             
         # Record detailed API request information
-        logger.debug(f"🌐 [Polygon] Starting news API request")
-        logger.debug(f"📋 [Polygon] Request parameters: path={path}")
-        logger.debug(f"📋 [Polygon] Query parameters: ticker={ticker}, gte={gte}, lte={lte}, limit={params['limit']}, cursor={page_token}")
+        logger.debug(
+            "[DATA_API] Starting news API request",
+            ticker=ticker,
+            gte=gte,
+            lte=lte,
+            limit=params["limit"],
+            page_token=page_token
+        )
         
         # Check API key status
         if not self.api_key:
-            logger.error("❌ [Polygon] API key not set")
+            logger.error("[DATA_API] API key not set")
             return [], None
         
         try:
@@ -217,32 +254,50 @@ class PolygonClient:
             elapsed_time = time.time() - start_time
             
             if not data:
-                logger.warning(f"⚠️ [Polygon] API returned empty response - ticker: {ticker}, time range: {gte} to {lte}")
+                logger.warning(
+                    "[DATA_API] API returned empty response",
+                    ticker=ticker,
+                    time_range=f"{gte} to {lte}"
+                )
                 return [], None
                 
-            logger.debug(f"⏱️ [Polygon] API request completed, elapsed time: {elapsed_time:.2f}s")
+            logger.debug(
+                "[DATA_API] API request completed",
+                elapsed_time=round(elapsed_time, 2)
+            )
             
             items: List[Dict] = data.get("results") or []
             next_url = data.get("next_url")
             
             # Record response statistics
-            logger.debug(f"📊 [Polygon] Response statistics: results={len(items)}, has_next_url={bool(next_url)}")
+            logger.debug(
+                "[DATA_API] Response statistics",
+                results=len(items),
+                has_next_url=bool(next_url)
+            )
             
         except PolygonError as poly_exc:
-            logger.error(f"❌ [Polygon] API error - status code: {poly_exc.status_code}, message: {str(poly_exc)}")
+            logger.error(
+                "[DATA_API] API error",
+                status_code=poly_exc.status_code,
+                message=str(poly_exc)
+            )
             # Provide specific suggestions based on error code
             if poly_exc.status_code == 401:
-                logger.debug(f"🔍 [Polygon] Authentication failed, check API key validity")
+                logger.debug("[DATA_API] Authentication failed, check API key validity")
             elif poly_exc.status_code == 403:
-                logger.debug(f"🔍 [Polygon] Insufficient permissions, check API subscription level")
+                logger.debug("[DATA_API] Insufficient permissions, check API subscription level")
             elif poly_exc.status_code == 429:
-                logger.debug(f"🔍 [Polygon] Request rate too high, suggest adding delay or upgrading plan")
+                logger.debug("[DATA_API] Request rate too high, suggest adding delay or upgrading plan")
             elif poly_exc.status_code >= 500:
-                logger.debug(f"🔍 [Polygon] Server error, suggest retrying later")
+                logger.debug("[DATA_API] Server error, suggest retrying later")
             return [], None
             
         except Exception as exc:
-            logger.error(f"❌ [Polygon] Request exception: {exc}", exc_info=True)
+            logger.error(
+                "[DATA_API] Request exception",
+                error=exc
+            )
             return [], None
         
         # Extract cursor parameter from next_url
@@ -253,14 +308,25 @@ class PolygonClient:
                 parsed_url = urlparse(next_url)
                 query_params = parse_qs(parsed_url.query)
                 next_cursor = query_params.get('cursor', [None])[0]
-                logger.debug(f"🔗 [Polygon] Successfully extracted next page cursor: {next_cursor}")
+                logger.debug(
+                    "[DATA_API] Successfully extracted next page cursor",
+                    next_cursor=next_cursor
+                )
             except Exception as e:
-                logger.warning(f"⚠️ [Polygon] Failed to parse next_url: {e}, URL: {next_url[:100]}...")
+                logger.warning(
+                    "[DATA_API] Failed to parse next_url",
+                    error=e,
+                    url=next_url[:100]
+                )
         else:
-            logger.debug(f"🔗 [Polygon] No next page link, this is the last page")
+            logger.debug("[DATA_API] No next page link, this is the last page")
         
         # Record detailed response statistics
-        logger.debug(f"📊 [Polygon] API response details: items={len(items)}, next_cursor={next_cursor}")
+        logger.debug(
+            "[DATA_API] API response details",
+            items=len(items),
+            next_cursor=next_cursor
+        )
         
         # Data quality validation and statistics
         if items:
@@ -269,7 +335,11 @@ class PolygonClient:
             if valid_times:
                 first_time = min(valid_times)
                 last_time = max(valid_times)
-                logger.debug(f"📅 [Polygon] News time range: {first_time} to {last_time}")
+                logger.debug(
+                    "[DATA_API] News time range",
+                    first_time=first_time,
+                    last_time=last_time
+                )
                 
                 # Validate if time range meets expectations
                 time_warnings = []
@@ -279,24 +349,40 @@ class PolygonClient:
                     time_warnings.append(f"Latest news {last_time} later than requested end time {lte}")
                 
                 if time_warnings:
-                    logger.warning(f"⚠️ [Polygon] Time range anomaly: {'; '.join(time_warnings)}")
+                    logger.warning(
+                        "[DATA_API] Time range anomaly",
+                        warnings=time_warnings
+                    )
             else:
-                logger.warning(f"⚠️ [Polygon] Returned news items missing valid timestamps")
+                logger.warning("[DATA_API] Returned news items missing valid timestamps")
             
             # Data completeness statistics
             titles_count = sum(1 for item in items if item.get('title', '').strip())
             descriptions_count = sum(1 for item in items if item.get('description', '').strip())
             urls_count = sum(1 for item in items if item.get('article_url', '').strip())
             
-            logger.debug(f"📝 [Polygon] Data completeness: titles {titles_count}/{len(items)}, descriptions {descriptions_count}/{len(items)}, URLs {urls_count}/{len(items)}")
+            logger.debug(
+                "[DATA_API] Data completeness",
+                titles=titles_count,
+                descriptions=descriptions_count,
+                urls=urls_count
+            )
             
             # Warn if data quality is low
             if titles_count < len(items) * 0.8:
-                logger.warning(f"⚠️ [Polygon] High title missing rate: {len(items) - titles_count}/{len(items)}")
+                logger.warning(
+                    "[DATA_API] High title missing rate",
+                    missing=len(items) - titles_count,
+                    total=len(items)
+                )
             if descriptions_count < len(items) * 0.5:
-                logger.warning(f"⚠️ [Polygon] High description missing rate: {len(items) - descriptions_count}/{len(items)}")
+                logger.warning(
+                    "[DATA_API] High description missing rate",
+                    missing=len(items) - descriptions_count,
+                    total=len(items)
+                )
         else:
-            logger.debug(f"📊 [Polygon] Returned empty result set")
+            logger.debug("[DATA_API] Returned empty result set")
         
         return items, next_cursor
 
@@ -378,15 +464,14 @@ class PolygonClient:
         Returns:
             Dict containing: market_cap, pe_ratio, dividend_yield, week_52_high, week_52_low, quarterly_dividend
         """
-        import logging
         from datetime import datetime, timedelta
         import pandas as pd
         
-        logger = logging.getLogger(__name__)
-        
-        logger.info(f"🏗️ [FUNDAMENTAL_DATA] PolygonClient.get_stock_indicators called:")
-        logger.info(f"  - ticker: {ticker}")
-        logger.info(f"  - date: {date}")
+        logger.info(
+            "[FUNDAMENTAL_DATA] PolygonClient.get_stock_indicators called",
+            ticker=ticker,
+            date=date
+        )
         
         result = {
             "market_cap": 0.0,

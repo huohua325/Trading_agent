@@ -8,13 +8,13 @@ set -euo pipefail
 
 # 📅 Backtest Date Range (YYYY-MM-DD format)
 START_DATE="${START_DATE:-2025-03-01}"    # Start date
-END_DATE="${END_DATE:-2025-06-30}"        # End date
+END_DATE="${END_DATE:-2025-03-30}"        # End date
 
 # 🤖 LLM Model Selection (Available options below)
-LLM_PROFILE="${LLM_PROFILE:-zhipuai}"      # Current: openai (uses deepseek-v3.1-250821)
+LLM_PROFILE="${LLM_PROFILE:-openai}"      # Current: openai (uses gpt-4o-mini)
 # you can add different LLM models in config.yaml
 # Available LLM profiles:
-#   - openai              : OpenAI GPT models (currently set to deepseek-v3.1)
+#   - openai              : OpenAI GPT models (currently set to gpt-4o-mini)
 #   - deepseek-v3.1       : DeepSeek V3.1 model
 #   - kimi-k2-0711-preview: Kimi K2 model
 #   - qwen3-235b-a22b-instruct-2507: Qwen3 235B model
@@ -168,8 +168,8 @@ main() {
         #"${PROFILE_UPPER}:${START_DATE}:${END_DATE}:"
         # Define test configurations
         # Empty symbols field (after last colon) will use symbols from config.yaml
-        #"${PROFILE_UPPER}:2025-03-01:2025-06-01:GS,MSFT,HD,V,SHW,CAT,MCD,UNH,AXP,AMGN,TRV,CRM,JPM,IBM,HON,BA,AMZN,AAPL,PG,JNJ"
-        "${PROFILE_UPPER}_1:2025-03-01:2025-06-30:GS,MSFT,HD,V,SHW,CAT,MCD,UNH,AXP,AMGN,TRV,CRM,JPM,IBM,HON,BA,AMZN,AAPL,PG,JNJ"
+        "${PROFILE_UPPER}_gpt_4o_mini:2025-03-01:2025-06-01:GS,MSFT,HD,V,SHW,CAT,MCD,UNH,AXP,AMGN,TRV,CRM,JPM,IBM,HON,BA,AMZN,AAPL,PG,JNJ"
+        #"${PROFILE_UPPER}_glm_4_5:2025-03-01:2025-03-30:GS,MSFT,HD,V,SHW,CAT,MCD,UNH,AXP,AMGN,TRV,CRM,JPM,IBM,HON,BA,AMZN,AAPL,PG,JNJ"
     )
     
     log_info "Starting execution of ${#TESTS[@]} backtest tasks"

@@ -6,8 +6,7 @@ import json
 from datetime import datetime, timezone
 
 import pandas as pd
-import logging
-logger = logging.getLogger(__name__)
+from loguru import logger
 
 from stockbench.backtest.metrics import evaluate
 from stockbench.backtest.slippage import Slippage
@@ -85,21 +84,25 @@ class Portfolio:
 		Returns:
 			bool: Whether the update was successful
 		"""
-		logger.info("=== Cash Update Operation ===")
-		logger.info(f"[CASH_UPDATE] Current cash: {self.cash:.2f}")
-		logger.info(f"[CASH_UPDATE] Change amount: {amount:.2f} ({'Increase' if amount >= 0 else 'Decrease'})")
-		
 		new_cash = self.cash + amount
-		logger.debug(f"[CASH_UPDATE] Calculate new cash: {self.cash:.2f} + ({amount:.2f}) = {new_cash:.2f}")
 		
 		if new_cash < 0:
-			logger.warning(f"[CASH_PROTECTION] Cash update rejected: new cash {new_cash:.2f} < 0")
-			logger.info("=== Cash Update Failed ===")
+			logger.warning(
+				"[BT_CASH] Cash update rejected",
+				old_cash=round(self.cash, 2),
+				change=round(amount, 2),
+				new_cash=round(new_cash, 2),
+				reason="negative_balance"
+			)
 			return False
 		
 		self.cash = new_cash
-		logger.info(f"[CASH_UPDATE] Cash update successful: {self.cash:.2f}")
-		logger.info("=== Cash Update Completed ===")
+		logger.debug(
+			"[BT_CASH] Cash updated",
+			old_cash=round(self.cash - amount, 2),
+			change=round(amount, 2),
+			new_cash=round(self.cash, 2)
+		)
 		return True
 	
 	def can_afford(self, cost: float) -> bool:
@@ -452,9 +455,9 @@ class BacktestEngine:
 			date: Current trading date
 		"""
 		try:
-			logger.info(f"[POSITION_VALIDATION] {date.date()}: Validating portfolio position consistency")
-			
 			inconsistencies_found = 0
+			issues = []
+			
 			for symbol, position in pf.positions.items():
 				if position is None:
 					continue
@@ -465,30 +468,38 @@ class BacktestEngine:
 				
 				# Check for suspicious values
 				if shares < 0:
-					logger.error(f"[POSITION_VALIDATION] {symbol}: Negative shares detected: {shares}")
+					issues.append({"symbol": symbol, "issue": "negative_shares", "value": shares})
 					inconsistencies_found += 1
 				
 				if shares > 0 and avg_price <= 0:
-					logger.error(f"[POSITION_VALIDATION] {symbol}: Has shares ({shares}) but invalid avg_price ({avg_price})")
+					issues.append({"symbol": symbol, "issue": "invalid_avg_price", "shares": shares, "avg_price": avg_price})
 					inconsistencies_found += 1
-				
-				if shares == 0 and (avg_price > 0 or holding_days > 0):
-					logger.warning(f"[POSITION_VALIDATION] {symbol}: Zero shares but avg_price={avg_price}, holding_days={holding_days}")
 				
 				# Check for the specific 57.01 bug
 				if abs(shares - 57.01) < 0.001:
-					logger.error(f"[POSITION_VALIDATION] {symbol}: Suspicious shares value 57.01 detected! This may be the target_cash_amount/price bug.")
+					issues.append({"symbol": symbol, "issue": "suspicious_shares_57.01", "value": shares})
 					inconsistencies_found += 1
-				
-				logger.debug(f"[POSITION_VALIDATION] {symbol}: shares={shares:.2f}, avg_price={avg_price:.4f}, holding_days={holding_days}")
 			
 			if inconsistencies_found > 0:
-				logger.error(f"[POSITION_VALIDATION] Found {inconsistencies_found} position inconsistencies on {date.date()}")
+				logger.error(
+					"[BT_VALIDATE] Position validation failed",
+					date=date.strftime("%Y-%m-%d"),
+					inconsistencies=inconsistencies_found,
+					issues=issues
+				)
 			else:
-				logger.info(f"[POSITION_VALIDATION] {date.date()}: All positions validated successfully")
+				logger.debug(
+					"[BT_VALIDATE] Position validation passed",
+					date=date.strftime("%Y-%m-%d"),
+					position_count=len(pf.positions)
+				)
 				
 		except Exception as e:
-			logger.warning(f"[POSITION_VALIDATION] Validation failed: {e}")
+			logger.warning(
+				"[BT_VALIDATE] Validation error",
+				date=date.strftime("%Y-%m-%d"),
+				error=str(e)
+			)
 
 	def _maybe_redecide_qty(self, strategy, ctx: Dict, symbol: str, current_shares: float, proposed_filled_qty: float, key: Tuple) -> float | None:
 		"""When position would become 0 after execution, trigger strategy re-decision.
@@ -771,38 +782,30 @@ class BacktestEngine:
 
 	def _fill_at_open(self, symbol: str, trade_date: pd.Timestamp, qty: float, open_price: float) -> Tuple[float, float, float]:
 		# Match at open price, considering slippage, commission and fill ratio
-		logger.info(f"=== Cash flow calculation started [{symbol}] ===")
-		logger.info(f"[CASH_FLOW] Initial params: symbol={symbol}, qty={qty}, open_price={open_price:.4f}")
-		
 		side = 1 if qty > 0 else -1
-		logger.info(f"[CASH_FLOW] Trade side: {'BUY' if side > 0 else 'SELL'} (side={side})")
 		
 		# Compute slippage price for updating average position price
 		px = self.slippage.apply_buy(open_price) if side > 0 else self.slippage.apply_sell(open_price)
-		logger.debug(f"[CASH_FLOW] Price after slippage: {px:.4f} (original: {open_price:.4f})")
 		
 		planned_qty = abs(qty)
 		filled_qty = round(planned_qty * max(0.0, min(1.0, self.fill_ratio)), 2)  # keep two decimals
 		filled_qty = filled_qty * side
-		logger.debug(f"[SHARES_CALCULATION] {symbol}: using open {open_price:.4f} (date: {trade_date})")
-		logger.debug(f"[SHARES_CALCULATION] {symbol}: planned_shares={planned_qty}, fill_ratio={self.fill_ratio}, filled_shares={filled_qty:.2f}")
 		
 		# Use raw opening price to compute gross notional and net cost
 		gross_open = open_price * abs(filled_qty)
-		logger.debug(f"[CASH_FLOW] Gross notional (using open): {open_price:.4f} × {abs(filled_qty):.2f} = {gross_open:.2f}")
-		
 		commission = self._apply_commission(gross_open)
-		logger.debug(f"[CASH_FLOW] Commission: {gross_open:.2f} × {self.commission_bps/10000:.4f} = {commission:.2f}")
-		
 		net_cost = gross_open + commission if side > 0 else -(gross_open - commission)
-		logger.debug(f"[CASH_FLOW] Net cost calc: {'BUY' if side > 0 else 'SELL'}")
-		if side > 0:
-			logger.debug(f"[CASH_FLOW]   Buy net cost = gross + commission = {gross_open:.2f} + {commission:.2f} = {net_cost:.2f}")
-		else:
-			logger.debug(f"[CASH_FLOW]   Sell net proceeds = -(gross - commission) = -({gross_open:.2f} - {commission:.2f}) = {net_cost:.2f}")
 		
-		logger.info(f"[CASH_FLOW] Final: filled_qty={filled_qty:.2f}, exec_px={px:.4f} (for average cost), open_price={open_price:.4f} (for cash), net_cost={net_cost:.2f}")
-		logger.info(f"=== Cash flow calculation ended [{symbol}] ===")
+		logger.info(
+			"[BT_ORDER] Order filled",
+			symbol=symbol,
+			side="buy" if side > 0 else "sell",
+			filled_qty=round(filled_qty, 2),
+			open_price=round(open_price, 4),
+			exec_price=round(px, 4),
+			net_cost=round(net_cost, 2),
+			commission=round(commission, 2)
+		)
 		
 		return filled_qty, px, net_cost
 
@@ -855,7 +858,14 @@ class BacktestEngine:
 							# shares multiplied by ratio; avg_price divided by ratio (keep nominal total cost roughly unchanged)
 							old_shares = pos.shares
 							pos.shares = round(pos.shares * ratio, 2)  # keep two decimals
-							logger.info(f"[SHARES_CALCULATION] Split {symbol}: {old_shares:.2f} × {ratio} = {pos.shares:.2f} (date: {date})")
+							logger.info(
+								"[BT_SPLIT] Stock split processed",
+								symbol=symbol,
+								date=date.strftime("%Y-%m-%d"),
+								old_shares=round(old_shares, 2),
+								ratio=ratio,
+								new_shares=round(pos.shares, 2)
+							)
 							if pos.shares != 0 and old_shares != 0:
 								pos.avg_price = float(pos.avg_price) / ratio
 							# Do not adjust cash on split day
@@ -887,19 +897,25 @@ class BacktestEngine:
 						if cash and cash != 0.0:
 							# Use safe cash update method
 							dividend_amount = float(pos.shares) * cash
-							logger.info(f"\n=== Dividend processing [{symbol}] ===")
-							logger.info(f"[DIVIDEND] Ex-dividend date: {d_str}")
-							logger.info(f"[DIVIDEND] Shares held: {pos.shares:.2f}")
-							logger.info(f"[DIVIDEND] Dividend per share: {cash:.4f}")
-							logger.info(f"[DIVIDEND] Total dividend: {pos.shares:.2f} × {cash:.4f} = {dividend_amount:.2f}")
-							logger.info(f"[DIVIDEND] Cash before: {pf.cash:.2f}")
+							cash_before = pf.cash
 							
 							if pf.update_cash(dividend_amount):
-								logger.info(f"[DIVIDEND] Cash after: {pf.cash:.2f}")
-								logger.info(f"[DIVIDEND] Cash increased: +{dividend_amount:.2f}")
+								logger.info(
+									"[BT_DIVIDEND] Dividend received",
+									symbol=symbol,
+									ex_date=d_str,
+									shares=round(pos.shares, 2),
+									dividend_per_share=round(cash, 4),
+									total_dividend=round(dividend_amount, 2),
+									cash_before=round(cash_before, 2),
+									cash_after=round(pf.cash, 2)
+								)
 							else:
-								logger.warning(f"[DIVIDEND] Dividend processing failed")
-							logger.info(f"=== Dividend processing completed ===\n")
+								logger.warning(
+									"[BT_DIVIDEND] Dividend processing failed",
+									symbol=symbol,
+									amount=round(dividend_amount, 2)
+								)
 		except Exception:
 			pass
 

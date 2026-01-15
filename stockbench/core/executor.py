@@ -4,8 +4,7 @@ import json
 import os
 from typing import Dict, List
 
-import logging
-logger = logging.getLogger(__name__)
+from loguru import logger
 from stockbench.core.schemas import Order
 
 # Generate orders based on decisions and price information (refactored: consistent with backtesting engine logic)
@@ -31,7 +30,12 @@ def plan_orders(decision: Dict, snapshot_price: float, cfg: Dict, portfolio: Dic
     if not ref_price or ref_price <= 0:
         ref_price = snapshot_price  # Fallback to snapshot price
     
-    logger.debug(f"[EXECUTOR] {symbol}: ref_price={ref_price:.4f}, snapshot_price={snapshot_price:.4f}")
+    logger.debug(
+        "[BT_EXECUTOR] Price reference",
+        symbol=symbol,
+        ref_price=round(ref_price, 4),
+        snapshot_price=round(snapshot_price, 4)
+    )
     
     # Calculate current position value (using same price reference)
     position_info = (portfolio or {}).get("positions", {}).get(symbol, {})
@@ -39,25 +43,50 @@ def plan_orders(decision: Dict, snapshot_price: float, cfg: Dict, portfolio: Dic
     
     if shares > 0:
         current_position_value = shares * ref_price
-        logger.debug(f"[EXECUTOR] {symbol}: Current position {shares} shares × {ref_price:.4f} = {current_position_value:.2f}")
+        logger.debug(
+            "[BT_EXECUTOR] Current position",
+            symbol=symbol,
+            shares=shares,
+            ref_price=round(ref_price, 4),
+            value=round(current_position_value, 2)
+        )
     else:
         current_position_value = 0.0
-        logger.debug(f"[EXECUTOR] {symbol}: No position")
     
     # Calculate cash change (consistent with backtesting engine logic)
     cash_change = target_cash_amount - current_position_value
-    logger.debug(f"[EXECUTOR] {symbol}: target_cash_amount={target_cash_amount:.2f}, current_position_value={current_position_value:.2f}")
-    logger.debug(f"[EXECUTOR] {symbol}: Original cash_change = {cash_change:.2f}")
+    logger.debug(
+        "[BT_EXECUTOR] Cash change",
+        symbol=symbol,
+        target_cash_amount=round(target_cash_amount, 2),
+        current_position_value=round(current_position_value, 2)
+    )
     
     if action == "increase":
         cash_change = max(0.0, cash_change)  # Cash change cannot be negative when increasing position
-        logger.debug(f"[EXECUTOR] {symbol}: increase operation, adjusted cash_change = {cash_change:.2f}")
+        logger.debug(
+            "[BT_EXECUTOR] Adjusted cash change",
+            symbol=symbol,
+            action=action,
+            cash_change=round(cash_change, 2)
+        )
     elif action == "decrease" or action == "close":
         cash_change = min(0.0, cash_change)  # Cash change cannot be positive when decreasing position
-        logger.debug(f"[EXECUTOR] {symbol}: {action} operation, adjusted cash_change = {cash_change:.2f}")
+        logger.debug(
+            "[BT_EXECUTOR] Adjusted cash change",
+            symbol=symbol,
+            action=action,
+            cash_change=round(cash_change, 2)
+        )
     
     if abs(cash_change) <= 0 or ref_price <= 0:
-        logger.info(f"[EXECUTOR] {symbol}: Skip trade - cash_change={cash_change:.2f}, ref_price={ref_price:.4f}")
+        logger.debug(
+            "[BT_EXECUTOR] Skip trade",
+            symbol=symbol,
+            cash_change=round(cash_change, 2),
+            ref_price=round(ref_price, 4),
+            reason="invalid_params"
+        )
         return []
 
     # Calculate current total position value
@@ -71,11 +100,21 @@ def plan_orders(decision: Dict, snapshot_price: float, cfg: Dict, portfolio: Dic
     # Key fix: use ref_price to calculate shares, consistent with backtesting engine logic
     qty_total = round(target_value / ref_price, 2)
     
-    logger.debug(f"[EXECUTOR] {symbol}: target_value={target_value:.2f}, ref_price={ref_price:.4f}")
-    logger.debug(f"[EXECUTOR] {symbol}: Calculate shares = {target_value:.2f} ÷ {ref_price:.4f} = {qty_total}")
+    logger.debug(
+        "[BT_EXECUTOR] Calculate shares",
+        symbol=symbol,
+        target_value=round(target_value, 2),
+        ref_price=round(ref_price, 4),
+        qty_total=qty_total
+    )
     
     if qty_total <= 0:
-        logger.info(f"[EXECUTOR] {symbol}: Shares is 0, skip trade")
+        logger.debug(
+            "[BT_EXECUTOR] Skip trade - zero shares",
+            symbol=symbol,
+            target_value=round(target_value, 2),
+            ref_price=round(ref_price, 4)
+        )
         return []
 
     qty_per_slice = max(round(qty_total / max(twap_slices, 1), 2), 0)

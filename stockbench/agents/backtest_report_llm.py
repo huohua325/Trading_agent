@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import json
 import os
-import logging
 from typing import Dict, Any, Optional
+from loguru import logger
 
 from stockbench.llm.llm_client import LLMClient, LLMConfig
 from stockbench.utils.logging_helper import get_llm_logger
+from stockbench.core.pipeline_context import PipelineContext
+from stockbench.core.decorators import traced_agent
 
 # Get logger
 llm_logger = get_llm_logger()
@@ -49,7 +51,31 @@ def _load_prompt(prompt_name: str) -> str:
 		return f"System Role: You are a quantitative backtest assistant. Please generate JSON format responses based on input data."
 
 
-def generate_backtest_report(payload: Dict[str, Any], cfg: Dict | None = None, run_id: Optional[str] = None, profile_name: Optional[str] = None) -> str:
+@traced_agent("backtest_report")
+def generate_backtest_report(payload: Dict[str, Any], cfg: Dict | None = None, run_id: Optional[str] = None, 
+                            profile_name: Optional[str] = None,
+                            ctx: Optional[PipelineContext] = None) -> str:
+    """
+    Generate backtest report using LLM.
+    
+    Args:
+        payload: Backtest metrics and data
+        cfg: Configuration dictionary
+        run_id: Run ID for caching
+        profile_name: LLM profile name (legacy)
+        ctx: PipelineContext for unified data flow
+        
+    Returns:
+        Generated report string
+    """
+    # === PipelineContext 兼容层 ===
+    if ctx is not None and isinstance(ctx, PipelineContext):
+        cfg = cfg or ctx.config
+        run_id = run_id or ctx.run_id
+        # 可以从 ctx 获取 payload（如果未显式传入）
+        if not payload:
+            payload = ctx.get("backtest_payload", {})
+    
     # Use the already selected llm config (processed by --llm-profile in run_backtest.py)
     llm_cfg_raw = (cfg or {}).get("llm", {})
     
